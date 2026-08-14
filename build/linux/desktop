@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=UnityPerfAgent
+Comment=Standalone Unity performance analysis tool
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/unityperfagent.exe %u
+Terminal=false
+Type=Application
+Icon=unityperfagent.exe
+Categories=Utility;
+StartupWMClass=unityperfagent.exe
+
+ 
