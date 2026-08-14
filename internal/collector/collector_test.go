@@ -127,6 +127,49 @@ func TestClear(t *testing.T) {
 	}
 }
 
+func TestReplace(t *testing.T) {
+	s := NewSession(8)
+	s.Append(frameN(99))
+	frames := []protocol.FrameData{frameN(1), frameN(2), frameN(3)}
+	s.Replace(frames)
+	if s.Len() != 3 || s.Total() != 3 {
+		t.Fatalf("len=%d total=%d", s.Len(), s.Total())
+	}
+	got := s.Range(0, 3)
+	for i, f := range got {
+		if f.FrameIndex != uint64(i+1) {
+			t.Fatalf("Range[%d] = %d", i, f.FrameIndex)
+		}
+	}
+}
+
+func TestReplaceOverflowKeepsLatest(t *testing.T) {
+	s := NewSession(4)
+	frames := make([]protocol.FrameData, 10)
+	for i := 0; i < 10; i++ {
+		frames[i] = frameN(i)
+	}
+	s.Replace(frames)
+	if s.Len() != 4 || s.Total() != 4 {
+		t.Fatalf("len=%d total=%d, want 4/4", s.Len(), s.Total())
+	}
+	got := s.Range(0, 4)
+	for i, f := range got {
+		if f.FrameIndex != uint64(6+i) {
+			t.Fatalf("Range[%d] = %d, want %d", i, f.FrameIndex, 6+i)
+		}
+	}
+}
+
+func TestReplaceEmpty(t *testing.T) {
+	s := NewSession(8)
+	s.Append(frameN(1))
+	s.Replace(nil)
+	if s.Len() != 0 || s.Total() != 0 {
+		t.Fatalf("empty replace: len=%d total=%d", s.Len(), s.Total())
+	}
+}
+
 func TestStats(t *testing.T) {
 	s := NewSession(100)
 	// 帧: fps 30/60, cpu 10/20
@@ -209,5 +252,26 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 	wg.Wait()
 	if s.Len() != 1000 || s.Total() != 1000 {
 		t.Fatalf("len=%d total=%d, want 1000/1000", s.Len(), s.Total())
+	}
+}
+
+func TestHierarchyAt(t *testing.T) {
+	s := NewSession(4)
+	s.AppendDetail(frameN(1), []protocol.SampleNode{{Name: "Main Thread", TotalMs: 16, Calls: 1}})
+	s.Append(frameN(2))
+	h, ok := s.HierarchyAt(0)
+	if !ok || len(h) != 1 || h[0].Name != "Main Thread" {
+		t.Fatalf("HierarchyAt(0)=%v ok=%v", h, ok)
+	}
+	h, ok = s.HierarchyAt(1)
+	if !ok || h != nil {
+		t.Fatalf("frame without hierarchy: %v ok=%v", h, ok)
+	}
+	if _, ok := s.HierarchyAt(2); ok {
+		t.Fatal("out of range should miss")
+	}
+	s.Clear()
+	if _, ok := s.HierarchyAt(0); ok {
+		t.Fatal("cleared session should miss")
 	}
 }

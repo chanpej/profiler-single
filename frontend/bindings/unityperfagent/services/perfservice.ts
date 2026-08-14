@@ -72,6 +72,13 @@ export function DiscoverPlayers(): $CancellablePromise<unityprofiler$0.PlayerInf
     return $Call.ByID(2816844050);
 }
 
+/**
+ * ExportCapture 将当前会话导出为紧凑二进制 .upac 文件。
+ */
+export function ExportCapture(path: string): $CancellablePromise<void> {
+    return $Call.ByID(240066965, path);
+}
+
 export function FrameAt(index: number): $CancellablePromise<protocol$0.FrameData> {
     return $Call.ByID(202191837, index);
 }
@@ -80,8 +87,23 @@ export function FrameCount(): $CancellablePromise<number> {
     return $Call.ByID(1134184887);
 }
 
+/**
+ * FrameHierarchy 返回选中帧的 CPU Hierarchy。
+ */
+export function FrameHierarchy(index: number): $CancellablePromise<protocol$0.SampleNode[] | null> {
+    return $Call.ByID(3057196683, index);
+}
+
 export function Frames(offset: number, limit: number): $CancellablePromise<protocol$0.FrameData[] | null> {
     return $Call.ByID(4218475089, offset, limit);
+}
+
+/**
+ * ImportCapture 加载紧凑二进制存档并替换当前会话数据。
+ * 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
+ */
+export function ImportCapture(path: string): $CancellablePromise<number> {
+    return $Call.ByID(724188008, path);
 }
 
 export function LLMConfig(): $CancellablePromise<llm$0.Config> {
@@ -92,8 +114,29 @@ export function Latest(n: number): $CancellablePromise<protocol$0.FrameData[] | 
     return $Call.ByID(2464889728, n);
 }
 
+/**
+ * SetCallStacks 开关 Call Stacks（GC.Alloc 等采样的托管调用栈）。
+ */
+export function SetCallStacks(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1106539956, on);
+}
+
+/**
+ * SetDeepProfiling 开关 Deep Profile。连接后立即下发给 Player，影响后续帧。
+ */
+export function SetDeepProfiling(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3600801599, on);
+}
+
 export function SetLLMConfig(cfg: llm$0.Config): $CancellablePromise<void> {
     return $Call.ByID(3687575922, cfg);
+}
+
+/**
+ * SetRecording 开关抓取。连接保持不变；暂停时丢弃新到的帧，已采集数据保留。
+ */
+export function SetRecording(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(2516516984, on);
 }
 
 export function Stats(): $CancellablePromise<collector$0.Stats> {

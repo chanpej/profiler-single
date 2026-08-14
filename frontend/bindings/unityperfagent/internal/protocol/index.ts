@@ -3,5 +3,6 @@
 
 export type {
     FrameData,
-    Handshake
+    Handshake,
+    SampleNode
 } from "./models.js";

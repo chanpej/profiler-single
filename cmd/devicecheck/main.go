@@ -76,7 +76,7 @@ func collect(host string, port int, duration time.Duration) error {
 	session := collector.NewSession(0)
 	client := device.NewClient()
 	closed := make(chan error, 1)
-	hs, err := client.Connect(host, port, session.Append, func(err error) { closed <- err })
+	hs, err := client.Connect(host, port, session.AppendDetail, func(err error) { closed <- err })
 	if err != nil {
 		return fmt.Errorf("Profiler 连接失败: %w", err)
 	}

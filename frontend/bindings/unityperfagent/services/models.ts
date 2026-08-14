@@ -24,6 +24,28 @@ export interface Status {
     "totalFrames": number;
     "retained": number;
     "unitySupported": boolean;
+
+    /**
+     * Recording 为 true 时把收到的帧写入会话；false 表示暂停抓取。
+     */
+    "recording": boolean;
+
+    /**
+     * SourceFile 是当前数据来自的存档路径；实时采集时为空。
+     */
+    "sourceFile": string;
+
+    /**
+     * DeepProfiling / CallStacks 是工具栏开关；连接后会下发给 Player。
+     */
+    "deepProfiling": boolean;
+    "callStacks": boolean;
+
+    /**
+     * DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 能力位。
+     */
+    "deepProfilerSupported": boolean;
+    "managedCallstacksSupported": boolean;
 }
 
 /**
@@ -33,4 +55,5 @@ export interface TickEvent {
     "totalFrames": number;
     "retained": number;
     "connected": boolean;
+    "recording": boolean;
 }

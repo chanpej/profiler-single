@@ -80,4 +80,55 @@ describe('ProfilerDetail', () => {
     rerender(<ProfilerDetail moduleId="rendering" frame={coarse} />);
     expect(screen.getByText('Frame Time')).toBeInTheDocument();
   });
+
+  it('有采样树时 Hierarchy 展示方法名，Call Stacks 显示调用栈', async () => {
+    const tree = [{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 16,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      children: [{
+        name: 'GC.Alloc',
+        category: 'GC',
+        totalMs: 0.1,
+        selfMs: 0.1,
+        calls: 1,
+        gcAllocKB: 4,
+        callstack: ['GC.Alloc', 'PlayerController.Update ()'],
+      }],
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} callStacks />);
+    expect(screen.getByTestId('cpu-hierarchy')).toBeInTheDocument();
+    expect(screen.getByText('Main Thread')).toBeInTheDocument();
+    await userEvent.click(screen.getByText('GC.Alloc'));
+    expect(screen.getByTestId('callstack-pane')).toHaveTextContent('PlayerController.Update');
+  });
+
+  it('收起后即使 hierarchy 被刷新为新对象也保持收起', async () => {
+    const tree = [{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 16,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      children: [{
+        name: 'BehaviourUpdate',
+        category: 'Scripts',
+        totalMs: 8,
+        selfMs: 8,
+        calls: 1,
+        gcAllocKB: 0,
+      }],
+    }];
+    const { rerender } = render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} />);
+    expect(screen.getByText('BehaviourUpdate')).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('折叠'));
+    expect(screen.queryByText('BehaviourUpdate')).not.toBeInTheDocument();
+
+    rerender(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={[{ ...tree[0], children: [...tree[0].children!] }]} />);
+    expect(screen.queryByText('BehaviourUpdate')).not.toBeInTheDocument();
+  });
 });

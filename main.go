@@ -38,8 +38,14 @@ func main() {
 		Height:           900,
 		MinWidth:         1080,
 		MinHeight:        680,
+		Frameless:        true,
 		BackgroundColour: application.NewRGB(10, 12, 16),
 		URL:              "/",
+		Windows: application.WindowsWindow{
+			Theme:                      application.Dark,
+			NonClientRegionSupport:     true,
+			WebView2CompositionHosting: true,
+		},
 	})
 
 	if err := app.Run(); err != nil {

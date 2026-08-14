@@ -42,6 +42,17 @@ export interface FrameData {
   uiVertices: number;
 }
 
+export interface SampleNode {
+  name: string;
+  category: string;
+  totalMs: number;
+  selfMs: number;
+  calls: number;
+  gcAllocKB: number;
+  callstack?: string[];
+  children?: SampleNode[];
+}
+
 export interface Stats {
   frameCount: number;
   avgFps: number;
@@ -78,6 +89,9 @@ export interface Handshake {
   os: string;
   unityVersion: string;
   appVersion: string;
+  profilerStreamVersion?: number;
+  deepProfilerSupported?: boolean;
+  managedCallstacksSupported?: boolean;
 }
 
 export interface PlayerInfo {
@@ -105,6 +119,14 @@ export interface Status {
   retained: number;
   /** 检测到的 Unity 版本是否为受支持的 2022.x。 */
   unitySupported: boolean;
+  /** 为 true 时写入新帧；false 表示暂停抓取。 */
+  recording?: boolean;
+  /** 当前数据来自的存档路径；实时采集时为空。 */
+  sourceFile?: string;
+  deepProfiling?: boolean;
+  callStacks?: boolean;
+  deepProfilerSupported?: boolean;
+  managedCallstacksSupported?: boolean;
 }
 
 export interface LLMConfig {
@@ -117,9 +139,10 @@ export interface TickEvent {
   totalFrames: number;
   retained: number;
   connected: boolean;
+  recording?: boolean;
 }
 
-export type ViewId = 'dashboard' | 'frames' | 'analysis' | 'settings';
+export type OverlayId = 'frames' | 'analysis' | 'settings';
 
 export type ProfilerModuleId =
   | 'cpu'

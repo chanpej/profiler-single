@@ -1,51 +1,105 @@
-import { ChevronLeft, ChevronRight, Circle, Eraser, Layers, ListTree } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Circle, Eraser, FolderOpen, Layers, ListTree, MousePointerClick, Pause, Play, Save, SkipForward } from 'lucide-react';
 import { formatFps, formatMs } from '../lib/format';
 import type { FrameData } from '../types';
 
 interface Props {
   recording: boolean;
+  connected: boolean;
   frame: FrameData | null;
   selectedIndex: number;
   total: number;
+  sourceFile?: string;
+  deepProfiling?: boolean;
+  callStacks?: boolean;
   onClear: () => void;
   onPrev: () => void;
   onNext: () => void;
   onSeek: (index: number) => void;
   onCurrent: () => void;
+  onToggleRecord: () => void;
+  onPause: () => void;
+  onExport: () => void;
+  onImport: () => void;
+  onDeepProfiling?: (on: boolean) => void;
+  onCallStacks?: (on: boolean) => void;
 }
 
-/** Unity Profiler 风格顶栏：Record / Deep Profile / Call Stacks / Clear / 帧导航。 */
+/** Unity Profiler 2022 风格顶栏：Record / Pause / Deep Profile / Call Stacks / Clear / Load / Save / 帧导航。 */
 export function ProfilerToolbar({
-  recording, frame, selectedIndex, total, onClear, onPrev, onNext, onSeek, onCurrent,
+  recording, connected, frame, selectedIndex, total, sourceFile,
+  deepProfiling = false, callStacks = false,
+  onClear, onPrev, onNext, onSeek, onCurrent, onToggleRecord, onPause, onExport, onImport,
+  onDeepProfiling, onCallStacks,
 }: Props) {
   const atStart = selectedIndex <= 0 || total === 0;
   const atEnd = selectedIndex >= total - 1 || total === 0;
+  const paused = connected && !recording;
+  const canCapture = connected;
+  const fileName = sourceFile ? sourceFile.replace(/^.*[\\/]/, '') : '';
 
   return (
     <div className="profiler-toolbar" role="toolbar" aria-label="Profiler 工具栏">
       <button
         type="button"
-        className={`btn ghost profiler-record ${recording ? 'is-on' : ''}`}
-        aria-pressed={recording}
-        title={recording ? '正在采集' : '未采集'}
-        aria-label={recording ? '正在采集' : '未采集'}
-        disabled
+        className={`btn ghost profiler-record ${recording && connected ? 'is-on' : ''}`}
+        aria-pressed={recording && connected}
+        title={connected ? (recording ? '停止录制' : '开始录制') : '连接 Player 后才能录制'}
+        aria-label={recording && connected ? '正在采集' : '未采集'}
+        disabled={!canCapture}
+        onClick={onToggleRecord}
       >
-        <Circle size={12} fill={recording ? 'currentColor' : 'none'} aria-hidden />
-        Record
+        <Circle size={12} fill={recording && connected ? 'currentColor' : 'none'} aria-hidden />
       </button>
-      <label className="profiler-check is-disabled" title="Deep Profile 需要 Unity Editor 插桩，独立工具暂不可用">
-        <input type="checkbox" disabled aria-label="Deep Profile" />
+      <button
+        type="button"
+        className={`btn ghost profiler-pause ${paused ? 'is-on' : ''}`}
+        aria-pressed={paused}
+        title={paused ? '继续抓取数据' : '暂停抓取数据'}
+        aria-label={paused ? '继续抓取' : '暂停抓取'}
+        disabled={!canCapture}
+        onClick={onPause}
+      >
+        {paused ? <Play size={14} aria-hidden /> : <Pause size={14} aria-hidden />}
+      </button>
+      <label
+        className={`profiler-check ${connected ? '' : 'is-disabled'}`}
+        title={connected
+          ? '采集全部脚本方法调用（需 Development Build 且开启 Deep Profiling Support）'
+          : '连接 Player 后可开启 Deep Profile'}
+      >
+        <input
+          type="checkbox"
+          aria-label="Deep Profile"
+          checked={deepProfiling}
+          disabled={!connected}
+          onChange={(e) => onDeepProfiling?.(e.target.checked)}
+        />
         Deep Profile
       </label>
-      <label className="profiler-check is-disabled" title="Call Stacks 需要 Unity Editor 插桩，独立工具暂不可用">
-        <input type="checkbox" disabled aria-label="Call Stacks" />
+      <label
+        className={`profiler-check ${connected ? '' : 'is-disabled'}`}
+        title={connected
+          ? '记录 GC.Alloc 等采样的托管调用栈'
+          : '连接 Player 后可开启 Call Stacks'}
+      >
+        <input
+          type="checkbox"
+          aria-label="Call Stacks"
+          checked={callStacks}
+          disabled={!connected}
+          onChange={(e) => onCallStacks?.(e.target.checked)}
+        />
         <ListTree size={12} aria-hidden />
         Call Stacks
       </label>
       <button type="button" className="btn ghost" onClick={onClear} title="清空数据" aria-label="清空数据">
         <Eraser size={14} aria-hidden />
-        Clear
+      </button>
+      <button type="button" className="btn ghost" onClick={onImport} title="加载二进制数据" aria-label="加载数据">
+        <FolderOpen size={14} aria-hidden />
+      </button>
+      <button type="button" className="btn ghost" onClick={onExport} disabled={total === 0} title="导出为紧凑二进制" aria-label="导出数据">
+        <Save size={14} aria-hidden />
       </button>
       <span className="profiler-sep" aria-hidden />
       <button type="button" className="btn ghost" disabled={atStart} onClick={onPrev} title="上一帧" aria-label="上一帧">
@@ -66,23 +120,25 @@ export function ProfilerToolbar({
         <ChevronRight size={16} aria-hidden />
       </button>
       <button type="button" className="btn ghost" disabled={total === 0} onClick={onCurrent} title="跳到最新帧" aria-label="最新帧">
-        Current
+        <SkipForward size={14} aria-hidden />
       </button>
       <span className="profiler-sep" aria-hidden />
-      <Layers size={14} className="dim" aria-hidden />
-      <span className="mono profiler-frame-meta">
-        {frame ? (
-          <>
-            #{frame.frameIndex}
-            {' · '}
-            {formatMs(frame.cpuTimeMs)}
-            {' · '}
+      {frame ? (
+        <>
+          <Layers size={14} className="dim" aria-hidden />
+          <span className="mono profiler-frame-meta">
+            CPU {formatMs(frame.cpuTimeMs)}
+            {'  '}
             {formatFps(frame.fps)} FPS
-          </>
-        ) : (
-          '无选中帧'
-        )}
-      </span>
+            {frame.gcAllocKB > 0 ? `  GC ${frame.gcAllocKB.toFixed(1)} KB` : ''}
+          </span>
+        </>
+      ) : (
+        <span className="profiler-frame-empty" title="无选中帧" aria-label="无选中帧">
+          <MousePointerClick size={14} aria-hidden />
+        </span>
+      )}
+      {fileName ? <span className="dim profiler-file" title={sourceFile}>{fileName}</span> : null}
     </div>
   );
 }

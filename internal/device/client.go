@@ -56,6 +56,22 @@ func (c *Client) Connected() bool {
 	return c.sess != nil && c.sess.Connected()
 }
 
+// SetProfilerOptions 向已连接的 Player 下发 Deep Profile / Call Stacks。
+func (c *Client) SetProfilerOptions(deep, callStacks bool) error {
+	if c.sess == nil {
+		return ErrNotConnected
+	}
+	return c.sess.SetProfilerOptions(deep, callStacks)
+}
+
+// ProfilerOptions 返回当前 Deep Profile / Call Stacks 状态。
+func (c *Client) ProfilerOptions() (deep, callStacks bool) {
+	if c.sess == nil {
+		return false, false
+	}
+	return c.sess.ProfilerOptions()
+}
+
 // Close 断开 Profiler 连接。
 func (c *Client) Close() {
 	if c.sess != nil {

@@ -1,12 +1,14 @@
 package unityprofiler
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math"
 	"math/rand"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +36,8 @@ type Player struct {
 	ln     net.Listener
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	deep   atomic.Bool
+	stacks atomic.Bool
 }
 
 // 假 Player 使用的分类、marker 与计数器编号。
@@ -63,6 +67,10 @@ const (
 	mkGC         uint32 = 114
 	mkVSync      uint32 = 115
 	mkUI         uint32 = 116
+	mkGCAlloc    uint32 = 117
+	mkPlayerUpd  uint32 = 118
+	mkGameTick   uint32 = 119
+	mkEnemyUpd   uint32 = 120
 
 	ctrIDCPUTotal   uint32 = 200
 	ctrIDCPUMain    uint32 = 201
@@ -176,6 +184,8 @@ func (p *Player) info(port int) PlayerInfo {
 func (p *Player) serve(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
+	go p.readCommands(ctx, conn)
+
 	port := 0
 	if p.ln != nil {
 		port = p.ln.Addr().(*net.TCPAddr).Port
@@ -234,7 +244,7 @@ func (p *Player) serve(ctx context.Context, conn net.Conn) {
 		case <-ticker.C:
 			events.Reset()
 			renderEvents.Reset()
-			gen.writeFrame(&events, &renderEvents)
+			gen.writeFrame(&events, &renderEvents, p.deep.Load(), p.stacks.Load())
 			// 主线程块先发以打开当前帧，渲染统计随后并入这一帧。
 			if err := p.sendStream(conn, fakeMainThreadID, &mainSeq, events.Bytes()); err != nil {
 				return
@@ -285,6 +295,10 @@ func (p *Player) writeMetadata(w *RecordWriter) {
 	w.MarkerDef(mkGC, 0, catGC, "GC.Collect")
 	w.MarkerDef(mkVSync, 0, catVSync, "WaitForTargetFPS")
 	w.MarkerDef(mkUI, 0, catGui, "UI.Repaint")
+	w.MarkerDef(mkGCAlloc, 0, catGC, "GC.Alloc")
+	w.MarkerDef(mkPlayerUpd, 0, catScripts, "PlayerController.Update")
+	w.MarkerDef(mkGameTick, 0, catScripts, "GameManager.Tick")
+	w.MarkerDef(mkEnemyUpd, 0, catScripts, "Enemy.Update")
 
 	w.CounterDef(ctrIDCPUTotal, catRender, "CPU Total Frame Time", DataTypeDouble, UnitTimeNanoseconds)
 	w.CounterDef(ctrIDCPUMain, catRender, "CPU Main Thread Frame Time", DataTypeDouble, UnitTimeNanoseconds)
@@ -377,7 +391,7 @@ func (g *frameGenerator) shape() FrameShape {
 
 // writeFrame 写出一帧完整事件序列：主线程流写采样与内存计数器，渲染线程流写渲染统计
 // （与真机一致，渲染统计不在主线程流上）。
-func (g *frameGenerator) writeFrame(w, render *RecordWriter) FrameShape {
+func (g *frameGenerator) writeFrame(w, render *RecordWriter, deep, stacks bool) FrameShape {
 	g.index++
 	s := g.shape()
 	ms := func(v float64) int64 { return int64(v * 1e6) }
@@ -395,6 +409,9 @@ func (g *frameGenerator) writeFrame(w, render *RecordWriter) FrameShape {
 		{mkAnimation, s.AnimMs}, {mkGC, s.GCMs}, {mkVSync, s.VSyncMs}, {mkUI, s.UIMs},
 	} {
 		w.Begin(seg.id, at)
+		if seg.id == mkScripts && (deep || stacks) {
+			writeDeepScripts(w, at, ms(seg.ms), deep, stacks, s.GCAllocKB)
+		}
 		at += ms(seg.ms)
 		w.End(seg.id, at)
 	}
@@ -440,6 +457,50 @@ func (g *frameGenerator) writeFrame(w, render *RecordWriter) FrameShape {
 	g.nowNS = end
 	// 下一条帧边界记录由后续帧写出；此处预留帧间空隙，使帧跨度等于 TotalMs。
 	return s
+}
+
+func writeDeepScripts(w *RecordWriter, start, durNS int64, deep, stacks bool, gcAllocKB float64) {
+	if deep {
+		mid := start + durNS/2
+		w.Begin(mkPlayerUpd, start)
+		w.Begin(mkGameTick, start)
+		w.End(mkGameTick, mid)
+		w.End(mkPlayerUpd, mid)
+		w.Begin(mkEnemyUpd, mid)
+		w.End(mkEnemyUpd, start+durNS)
+	}
+	if stacks {
+		allocAt := start + durNS/4
+		w.Begin(mkGCAlloc, allocAt)
+		w.Int64Meta(int64(gcAllocKB * bytesPerKB))
+		w.StringMeta("GC.Alloc\nPlayerController.Update ()\nGameManager.Tick ()\nUnityEngine.MonoBehaviour:Update ()")
+		w.End(mkGCAlloc, allocAt+1000)
+	}
+}
+
+func (p *Player) readCommands(ctx context.Context, conn net.Conn) {
+	br := bufio.NewReader(conn)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		msg, err := ReadMessage(br)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if isTimeout(err) {
+				continue
+			}
+			return
+		}
+		if msg.ID == MsgIDProfilerSetup {
+			deep, stacks := ParseSetupFlags(msg.Body)
+			p.deep.Store(deep)
+			p.stacks.Store(stacks)
+		}
+	}
 }
 
 func (p *Player) announceLoop(ctx context.Context, port int) {

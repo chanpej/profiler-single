@@ -59,8 +59,8 @@ func isTimeout(err error) bool {
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
-// FrameHandler 每解析出一帧 Profiler 数据时回调。
-type FrameHandler func(protocol.FrameData)
+// FrameHandler 每解析出一帧 Profiler 数据时回调。hierarchy 为主线程采样树，可为空。
+type FrameHandler func(frame protocol.FrameData, hierarchy []protocol.SampleNode)
 
 // Session 是连到 Unity Development Player 的 Profiler 客户端。
 type Session struct {
@@ -69,12 +69,14 @@ type Session struct {
 	AreaMask   uint32
 	Categories []string
 
-	mu        sync.Mutex
-	conn      net.Conn
-	handshake protocol.Handshake
-	decoder   *Decoder
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu         sync.Mutex
+	conn       net.Conn
+	handshake  protocol.Handshake
+	decoder    *Decoder
+	cancel     context.CancelFunc
+	done       chan struct{}
+	deep       bool
+	callStacks bool
 }
 
 // NewSession 创建未连接的会话。
@@ -146,6 +148,8 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 	s.decoder = NewDecoder(nil)
 	s.cancel = cancel
 	s.done = done
+	s.deep = false
+	s.callStacks = false
 	s.mu.Unlock()
 
 	go s.readLoop(ctx, conn, br, intro.Pending, onFrame, onClosed, done)
@@ -154,7 +158,7 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 
 // WriteProfilerStart 下发 Editor 打开 Profiler 时的报文序列。
 func WriteProfilerStart(w interface{ Write([]byte) (int, error) }, mask uint32, categories []string) error {
-	if err := WriteMessage(w, MsgIDProfilerSetup, EncodeAreaMask(0)); err != nil {
+	if err := WriteMessage(w, MsgIDProfilerSetup, EncodeSetupFlags(false, false)); err != nil {
 		return err
 	}
 	if err := WriteMessage(w, MsgIDProfilerAreas, EncodeAreaMask(mask)); err != nil {
@@ -236,9 +240,11 @@ func readPlayerIntro(r *bufio.Reader) (playerIntro, error) {
 
 func handshakeFromIntro(intro playerIntro) protocol.Handshake {
 	hs := protocol.Handshake{
-		DeviceName:   intro.Info.ID,
-		AppVersion:   intro.Info.ProjectName,
-		UnityVersion: intro.Engine.Version,
+		DeviceName:                 intro.Info.ID,
+		AppVersion:                 intro.Info.ProjectName,
+		UnityVersion:               intro.Engine.Version,
+		DeepProfilerSupported:      intro.Engine.DeepProfilerSupported,
+		ManagedCallstacksSupported: intro.Engine.ManagedCallstacksSupported,
 	}
 	if model := deviceModelFromID(intro.Info.ID); model != "" {
 		hs.DeviceModel = model
@@ -274,7 +280,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 
 	dec := NewDecoder(func(snap FrameSnapshot) {
 		if onFrame != nil {
-			onFrame(ToFrameData(snap))
+			onFrame(ToFrameData(snap), snap.Hierarchy)
 		}
 	})
 	s.mu.Lock()
@@ -398,6 +404,29 @@ func (s *Session) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn != nil
+}
+
+// SetProfilerOptions 向 Player 下发 Deep Profile / Call Stacks 开关。
+// 只影响之后的帧；已采集数据不变。未连接时返回 ErrNotConnected。
+func (s *Session) SetProfilerOptions(deep, callStacks bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conn == nil {
+		return ErrNotConnected
+	}
+	s.deep = deep
+	s.callStacks = callStacks
+	_ = s.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	err := WriteMessage(s.conn, MsgIDProfilerSetup, EncodeSetupFlags(deep, callStacks))
+	_ = s.conn.SetWriteDeadline(time.Time{})
+	return err
+}
+
+// ProfilerOptions 返回当前已下发的 Deep Profile / Call Stacks 状态。
+func (s *Session) ProfilerOptions() (deep, callStacks bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deep, s.callStacks
 }
 
 // Close 停止采集、断开连接并等待读取循环退出。

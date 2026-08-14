@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Window } from '@wailsio/runtime';
 import { api } from './api';
+import { captureDialogs } from './lib/captureDialog';
 import { loadPackageId, savePackageId } from './lib/packageIdStorage';
-import type { FrameData, Stats, Status, ViewId } from './types';
-import { Sidebar } from './components/Sidebar';
+import { createWindowControls } from './lib/window';
+import type { OverlayId, Stats, Status } from './types';
+import { TitleBar } from './components/TitleBar';
+import { MenuBar } from './components/MenuBar';
+import { AppDialog } from './components/AppDialog';
 import { ConnectBar } from './components/ConnectBar';
 import { FrameTable } from './components/FrameTable';
 import { AnalysisView } from './components/AnalysisView';
 import { SettingsView } from './components/SettingsView';
 import { ProfilerView } from './components/ProfilerView';
 
-const CHART_WINDOW = 600;
-const REFRESH_MS = 500;
+const LIVE_REFRESH_MS = 200;
+const IDLE_REFRESH_MS = 500;
 
 const emptyStatus: Status = {
   connected: false,
@@ -19,24 +24,36 @@ const emptyStatus: Status = {
   totalFrames: 0,
   retained: 0,
   unitySupported: false,
+  recording: true,
+  sourceFile: '',
+  deepProfiling: false,
+  callStacks: false,
 };
 
+const overlayTitle: Record<OverlayId, string> = {
+  frames: '帧数据',
+  analysis: '诊断',
+  settings: '设置',
+};
+
+const windowControls = createWindowControls(Window as unknown as import('./lib/window').WindowAPI);
+
 function App() {
-  const [view, setView] = useState<ViewId>('dashboard');
+  const [overlay, setOverlay] = useState<OverlayId | null>(null);
   const [status, setStatus] = useState<Status>(emptyStatus);
   const [, setStats] = useState<Stats | null>(null);
-  const [chartFrames, setChartFrames] = useState<FrameData[]>([]);
   const [busy, setBusy] = useState(false);
   const [packageId, setPackageId] = useState(loadPackageId);
   const [error, setError] = useState('');
   const [llmReady, setLlmReady] = useState(false);
   const lastRefresh = useRef(0);
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const refresh = useCallback(async () => {
-    const [st, sf, latest] = await Promise.all([api.status(), api.stats(), api.latest(CHART_WINDOW)]);
+    const [st, sf] = await Promise.all([api.status(), api.stats()]);
     setStatus(st);
     setStats(sf);
-    setChartFrames(latest ?? []);
   }, []);
 
   useEffect(() => {
@@ -44,7 +61,9 @@ function App() {
     api.llmConfig().then((cfg) => setLlmReady((cfg.agentCommand ?? '').trim() !== '')).catch(() => {});
     const off = api.onTick(() => {
       const now = Date.now();
-      if (now - lastRefresh.current < REFRESH_MS) return;
+      const live = statusRef.current.connected && statusRef.current.recording !== false;
+      const interval = live ? LIVE_REFRESH_MS : IDLE_REFRESH_MS;
+      if (now - lastRefresh.current < interval) return;
       lastRefresh.current = now;
       refresh().catch(() => {});
     });
@@ -70,48 +89,109 @@ function App() {
   }, []);
 
   const fetchRange = useCallback((offset: number, limit: number) => api.frames(offset, limit), []);
+  const getFrame = useCallback((index: number) => api.frameAt(index), []);
+  const getHierarchy = useCallback((index: number) => api.frameHierarchy(index), []);
   const saveLLM = useCallback(async (cfg: Parameters<typeof api.setLLMConfig>[0]) => {
     await api.setLLMConfig(cfg);
     setLlmReady(cfg.agentCommand.trim() !== '');
   }, []);
 
+  const recording = status.recording !== false;
+  const onToggleRecord = () => {
+    if (!status.connected) return;
+    guard(() => api.setRecording(!recording));
+  };
+  const onPause = () => {
+    if (!status.connected) return;
+    guard(() => api.setRecording(!recording));
+  };
+  const onExport = () => guard(async () => {
+    const path = await captureDialogs.save();
+    if (!path) return;
+    await api.exportCapture(path);
+  });
+  const onImport = () => guard(async () => {
+    const path = await captureDialogs.open();
+    if (!path) return;
+    await api.importCapture(path);
+  });
+  const onClear = () => guard(() => api.clear());
+  const onDeepProfiling = (on: boolean) => {
+    guard(() => api.setDeepProfiling(on));
+  };
+  const onCallStacks = (on: boolean) => {
+    guard(() => api.setCallStacks(on));
+  };
+
+  const fileName = (status.sourceFile ?? '').replace(/^.*[\\/]/, '');
+
   return (
     <div className="app">
-      <Sidebar active={view} onSelect={setView} />
-      <div className="app-main">
-        <ConnectBar
-          status={status}
-          busy={busy}
-          packageId={packageId}
-          onPackageIdChange={onPackageIdChange}
-          onDisconnect={() => guard(() => api.disconnect())}
-          onUSB={() => guard(() => api.connectUSB('', packageId.trim()))}
-          onClear={() => guard(() => api.clear())}
-        />
-        {error && (
-          <div className="error-banner" role="alert">{error}</div>
-        )}
-
-        {view === 'dashboard' && (
-          <ProfilerView
-            frames={chartFrames}
-            recording={status.connected}
-            onClear={() => guard(() => api.clear())}
+      <TitleBar
+        subtitle={fileName}
+        controls={windowControls}
+      />
+      <MenuBar
+        canSave={status.retained > 0}
+        onImport={onImport}
+        onExport={onExport}
+        onClear={onClear}
+        onFrames={() => setOverlay('frames')}
+        onAnalysis={() => setOverlay('analysis')}
+        onSettings={() => setOverlay('settings')}
+      />
+      <div className="app-body">
+        <div className="app-main">
+          <ConnectBar
+            status={status}
+            busy={busy}
+            packageId={packageId}
+            onPackageIdChange={onPackageIdChange}
+            onDisconnect={() => guard(() => api.disconnect())}
+            onUSB={() => guard(() => api.connectUSB('', packageId.trim()))}
+            onClear={onClear}
           />
-        )}
+          {error && (
+            <div className="error-banner" role="alert">{error}</div>
+          )}
 
-        {view === 'frames' && (
+          <ProfilerView
+            totalCount={status.retained}
+            fetchRange={fetchRange}
+            getFrame={getFrame}
+            getHierarchy={getHierarchy}
+            recording={recording}
+            connected={status.connected}
+            sourceFile={status.sourceFile}
+            deepProfiling={status.deepProfiling === true}
+            callStacks={status.callStacks === true}
+            onClear={onClear}
+            onToggleRecord={onToggleRecord}
+            onPause={onPause}
+            onExport={onExport}
+            onImport={onImport}
+            onDeepProfiling={onDeepProfiling}
+            onCallStacks={onCallStacks}
+          />
+        </div>
+      </div>
+
+      <AppDialog
+        title={overlay ? overlayTitle[overlay] : ''}
+        open={overlay !== null}
+        onClose={() => setOverlay(null)}
+        wide={overlay === 'frames'}
+      >
+        {overlay === 'frames' && (
           <div className="frames-view">
             <FrameTable totalCount={status.retained} fetchRange={fetchRange} />
           </div>
         )}
-
-        {view === 'analysis' && (
+        {overlay === 'analysis' && (
           <AnalysisView analyze={() => api.analyze()} diagnose={() => api.diagnose()} llmReady={llmReady} />
         )}
-
-        {view === 'settings' && <SettingsView load={() => api.llmConfig()} save={saveLLM} />}
-      </div>
+        {overlay === 'settings' && <SettingsView load={() => api.llmConfig()} save={saveLLM} />}
+      </AppDialog>
     </div>
   );
 }

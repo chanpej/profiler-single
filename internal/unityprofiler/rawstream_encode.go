@@ -146,6 +146,20 @@ func (w *RecordWriter) End(markerID uint32, ts int64) {
 	w.i64(ts)
 }
 
+// StringMeta 在当前采样上追加一条字符串元数据（Call Stacks 的调用栈文本）。
+func (w *RecordWriter) StringMeta(s string) {
+	w.u8(1)
+	w.u8(DataTypeString)
+	w.str(s)
+}
+
+// Int64Meta 在当前采样上追加一条 Int64 元数据（如 GC.Alloc 字节数）。
+func (w *RecordWriter) Int64Meta(v int64) {
+	w.u8(1)
+	w.u8(DataTypeInt64)
+	w.i64(v)
+}
+
 // CounterInt64 写出一条 Int64 计数器取值（事件流）。
 func (w *RecordWriter) CounterInt64(markerID uint32, ts int64, v int64) {
 	w.counterHead(markerID, ts)

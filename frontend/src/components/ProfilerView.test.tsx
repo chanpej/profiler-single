@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProfilerView } from './ProfilerView';
 import { emptyFrame } from '../lib/frame';
 import type { FrameData } from '../types';
+import type { ComponentProps } from 'react';
 
 function frameAt(i: number): FrameData {
   return emptyFrame({
@@ -30,16 +31,34 @@ function frameAt(i: number): FrameData {
 
 const frames = [frameAt(0), frameAt(1), frameAt(2)];
 
+const noop = () => {};
+
+function renderView(over: Partial<ComponentProps<typeof ProfilerView>> = {}) {
+  return render(
+    <ProfilerView
+      frames={frames}
+      recording
+      connected
+      onClear={noop}
+      onToggleRecord={noop}
+      onPause={noop}
+      onExport={noop}
+      onImport={noop}
+      {...over}
+    />,
+  );
+}
+
 describe('ProfilerView', () => {
   it('默认展示 CPU/GPU/Rendering/Memory 模块图', () => {
-    render(<ProfilerView frames={frames} recording onClear={vi.fn()} />);
+    renderView();
     expect(screen.getByTestId('profiler-chart-cpu')).toBeInTheDocument();
     expect(screen.getByTestId('profiler-chart-memory')).toBeInTheDocument();
     expect(screen.queryByTestId('profiler-chart-audio')).not.toBeInTheDocument();
   });
 
   it('可开关 Profiler 模块', async () => {
-    render(<ProfilerView frames={frames} recording onClear={vi.fn()} />);
+    renderView();
     await userEvent.click(screen.getByLabelText('Audio'));
     expect(screen.getByTestId('profiler-chart-audio')).toBeInTheDocument();
     await userEvent.click(screen.getByLabelText('CPU Usage'));
@@ -47,7 +66,7 @@ describe('ProfilerView', () => {
   });
 
   it('帧前进后退与 Current', async () => {
-    render(<ProfilerView frames={frames} recording onClear={vi.fn()} />);
+    renderView();
     expect(screen.getByLabelText('当前帧')).toHaveValue('2');
     await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
     expect(screen.getByLabelText('当前帧')).toHaveValue('1');
@@ -56,7 +75,7 @@ describe('ProfilerView', () => {
   });
 
   it('点击 Memory 模块后详情切换为 Simple 内存表', async () => {
-    render(<ProfilerView frames={frames} recording onClear={vi.fn()} />);
+    renderView();
     await userEvent.click(screen.getByLabelText('Memory'));
     expect(screen.getByTestId('memory-simple')).toBeInTheDocument();
     expect(screen.getByText('GfxDriver')).toBeInTheDocument();
@@ -64,15 +83,123 @@ describe('ProfilerView', () => {
 
   it('Clear 按钮触发回调', async () => {
     const onClear = vi.fn();
-    render(<ProfilerView frames={frames} recording={false} onClear={onClear} />);
+    renderView({ recording: false, connected: false, onClear });
     await userEvent.click(screen.getByRole('button', { name: '清空数据' }));
     expect(onClear).toHaveBeenCalled();
   });
 
   it('CPU Timeline 页签可切换', async () => {
-    render(<ProfilerView frames={frames} recording onClear={vi.fn()} />);
+    renderView();
     await userEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
     expect(screen.getByTestId('cpu-timeline')).toBeInTheDocument();
     expect(screen.getByText('Main Thread')).toBeInTheDocument();
+  });
+
+  it('Record / Pause / Save / Load 触发回调', async () => {
+    const onToggleRecord = vi.fn();
+    const onPause = vi.fn();
+    const onExport = vi.fn();
+    const onImport = vi.fn();
+    renderView({ onToggleRecord, onPause, onExport, onImport });
+    await userEvent.click(screen.getByRole('button', { name: '正在采集' }));
+    await userEvent.click(screen.getByRole('button', { name: '暂停抓取' }));
+    await userEvent.click(screen.getByRole('button', { name: '导出数据' }));
+    await userEvent.click(screen.getByRole('button', { name: '加载数据' }));
+    expect(onToggleRecord).toHaveBeenCalled();
+    expect(onPause).toHaveBeenCalled();
+    expect(onExport).toHaveBeenCalled();
+    expect(onImport).toHaveBeenCalled();
+  });
+
+  it('未连接时 Record 与暂停不可用', () => {
+    renderView({ connected: false, recording: false });
+    expect(screen.getByRole('button', { name: '未采集' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '暂停抓取' })).toBeDisabled();
+  });
+});
+
+describe('ProfilerView 时间轴视口', () => {
+  afterEach(() => localStorage.clear());
+
+  const many = Array.from({ length: 400 }, (_, i) => frameAt(i));
+
+  function viewport() {
+    return screen.getByTestId('profiler-viewport');
+  }
+
+  it('跟随时窗口钉在最新 300 帧', () => {
+    renderView({ frames: many });
+    expect(viewport()).toHaveAttribute('data-follow', 'true');
+    expect(viewport()).toHaveAttribute('data-visible', '300');
+    expect(viewport()).toHaveAttribute('data-start', '100');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('399');
+    expect(screen.getByTestId('profiler-range')).toHaveTextContent('100–399 · 300帧');
+  });
+
+  it('点选历史帧后停止跟随（视图暂停）', async () => {
+    renderView({ frames: many });
+    await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
+    expect(viewport()).toHaveAttribute('data-follow', 'false');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('398');
+    expect(viewport()).toHaveAttribute('data-start', '100');
+  });
+
+  it('Current 恢复实时跟随', async () => {
+    renderView({ frames: many });
+    await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
+    await userEvent.click(screen.getByRole('button', { name: '最新帧' }));
+    expect(viewport()).toHaveAttribute('data-follow', 'true');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('399');
+  });
+
+  it('滚轮向下缩小（可见帧变多）且保持跟随', () => {
+    renderView({ frames: many });
+    const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    fireEvent.wheel(canvas!, { deltaY: 120, clientX: 512 });
+    expect(Number(viewport().getAttribute('data-visible'))).toBeGreaterThan(300);
+    expect(viewport()).toHaveAttribute('data-follow', 'true');
+  });
+
+  it('滚轮向上放大不低于 300 帧', () => {
+    renderView({ frames: many });
+    const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
+    expect(viewport()).toHaveAttribute('data-visible', '300');
+  });
+
+  it('滚动条平移会暂停跟随', () => {
+    renderView({ frames: many });
+    const bar = screen.getByLabelText('时间轴滚动');
+    expect(bar).toBeEnabled();
+    fireEvent.change(bar, { target: { value: '10' } });
+    expect(viewport()).toHaveAttribute('data-start', '10');
+    expect(viewport()).toHaveAttribute('data-follow', 'false');
+  });
+
+  it('帧数不足一屏时滚动条禁用', () => {
+    renderView();
+    expect(screen.getByLabelText('时间轴滚动')).toBeDisabled();
+    expect(screen.getByTestId('profiler-range')).toHaveTextContent('0–2 · 3帧');
+  });
+
+  it('切换模块时详情面板高度保持不变，拖拽可调高', async () => {
+    renderView();
+    const wrap = screen.getByTestId('profiler-detail-wrap');
+    const before = wrap.style.height;
+    await userEvent.click(screen.getByLabelText('Memory'));
+    expect(wrap.style.height).toBe(before);
+    const handle = screen.getByTestId('profiler-resize');
+    expect(wrap.contains(handle)).toBe(true);
+    fireEvent.pointerDown(handle, { clientY: 400, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientY: 300, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientY: 300, pointerId: 1 });
+    expect(Number.parseInt(wrap.style.height, 10)).toBeGreaterThan(Number.parseInt(before, 10) || 0);
+  });
+
+  it('Deep Profile 开关传到工具栏', async () => {
+    const onDeepProfiling = vi.fn();
+    renderView({ onDeepProfiling, connected: true });
+    await userEvent.click(screen.getByLabelText('Deep Profile'));
+    expect(onDeepProfiling).toHaveBeenCalledWith(true);
   });
 });

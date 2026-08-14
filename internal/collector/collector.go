@@ -34,6 +34,7 @@ type Stats struct {
 type Session struct {
 	mu    sync.RWMutex
 	buf   []protocol.FrameData
+	hier  [][]protocol.SampleNode
 	head  int // 下一个写入位置
 	size  int // 当前存储帧数
 	total uint64
@@ -44,14 +45,23 @@ func NewSession(capacity int) *Session {
 	if capacity <= 0 {
 		capacity = DefaultCapacity
 	}
-	return &Session{buf: make([]protocol.FrameData, capacity)}
+	return &Session{
+		buf:  make([]protocol.FrameData, capacity),
+		hier: make([][]protocol.SampleNode, capacity),
+	}
 }
 
 // Append 追加一帧数据。
 func (s *Session) Append(f protocol.FrameData) {
+	s.AppendDetail(f, nil)
+}
+
+// AppendDetail 追加一帧及其 CPU Hierarchy。
+func (s *Session) AppendDetail(f protocol.FrameData, hierarchy []protocol.SampleNode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.buf[s.head] = f
+	s.hier[s.head] = hierarchy
 	s.head = (s.head + 1) % len(s.buf)
 	if s.size < len(s.buf) {
 		s.size++
@@ -78,6 +88,34 @@ func (s *Session) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.head, s.size, s.total = 0, 0, 0
+	for i := range s.hier {
+		s.hier[i] = nil
+	}
+}
+
+// Replace 用 frames 覆盖当前会话。超出容量时保留末尾（最新）帧。
+func (s *Session) Replace(frames []protocol.FrameData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.head, s.size, s.total = 0, 0, 0
+	for i := range s.hier {
+		s.hier[i] = nil
+	}
+	if len(frames) == 0 {
+		return
+	}
+	start := 0
+	if len(frames) > len(s.buf) {
+		start = len(frames) - len(s.buf)
+	}
+	for i := start; i < len(frames); i++ {
+		s.buf[s.head] = frames[i]
+		s.head = (s.head + 1) % len(s.buf)
+		if s.size < len(s.buf) {
+			s.size++
+		}
+		s.total++
+	}
 }
 
 // Range 返回按时间顺序排列的第 offset 起 limit 帧（offset 0 为最旧帧）。
@@ -111,6 +149,23 @@ func (s *Session) At(index int) (protocol.FrameData, bool) {
 	}
 	start := s.head - s.size + len(s.buf)
 	return s.buf[(start+index)%len(s.buf)], true
+}
+
+// HierarchyAt 返回第 index 帧的 CPU Hierarchy。无数据时 ok 为 false。
+func (s *Session) HierarchyAt(index int) ([]protocol.SampleNode, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if index < 0 || index >= s.size {
+		return nil, false
+	}
+	start := s.head - s.size + len(s.buf)
+	h := s.hier[(start+index)%len(s.buf)]
+	if len(h) == 0 {
+		return nil, true
+	}
+	out := make([]protocol.SampleNode, len(h))
+	copy(out, h)
+	return out, true
 }
 
 // Latest 返回最近的 n 帧（按时间顺序）。

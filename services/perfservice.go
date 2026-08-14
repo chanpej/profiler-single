@@ -17,6 +17,7 @@ import (
 
 	"unityperfagent/internal/adbforward"
 	"unityperfagent/internal/analyzer"
+	"unityperfagent/internal/capture"
 	"unityperfagent/internal/collector"
 	"unityperfagent/internal/device"
 	"unityperfagent/internal/llm"
@@ -34,6 +35,7 @@ type TickEvent struct {
 	TotalFrames uint64 `json:"totalFrames"`
 	Retained    int    `json:"retained"`
 	Connected   bool   `json:"connected"`
+	Recording   bool   `json:"recording"`
 }
 
 // Status 是连接状态快照。
@@ -47,20 +49,35 @@ type Status struct {
 	TotalFrames    uint64             `json:"totalFrames"`
 	Retained       int                `json:"retained"`
 	UnitySupported bool               `json:"unitySupported"`
+	// Recording 为 true 时把收到的帧写入会话；false 表示暂停抓取。
+	Recording bool `json:"recording"`
+	// SourceFile 是当前数据来自的存档路径；实时采集时为空。
+	SourceFile string `json:"sourceFile"`
+	// DeepProfiling / CallStacks 是工具栏开关；连接后会下发给 Player。
+	DeepProfiling bool `json:"deepProfiling"`
+	CallStacks    bool `json:"callStacks"`
+	// DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 能力位。
+	DeepProfilerSupported      bool `json:"deepProfilerSupported"`
+	ManagedCallstacksSupported bool `json:"managedCallstacksSupported"`
 }
 
 // PerfService 是性能采集与分析的门面，供前端调用。
 type PerfService struct {
-	mu        sync.Mutex
-	client    *device.Client
-	session   *collector.Session
-	llmCfg    llm.Config
-	transport string
-	tunnel    *adbforward.Tunnel
-	adbRun    adbforward.Runner
-	emit      func(name string, data any)
-	logger    *log.Logger
-	logFile   *os.File
+	mu         sync.Mutex
+	client     *device.Client
+	session    *collector.Session
+	llmCfg     llm.Config
+	transport  string
+	tunnel     *adbforward.Tunnel
+	adbRun     adbforward.Runner
+	emit       func(name string, data any)
+	logger     *log.Logger
+	logFile    *os.File
+	recording  bool
+	sourceFile string
+	loadedHS   protocol.Handshake
+	deep       bool
+	callStacks bool
 
 	// tickReq 是"界面需要刷新"的合并信号，容量 1 且非阻塞投递。
 	tickReq chan struct{}
@@ -70,12 +87,13 @@ type PerfService struct {
 // NewPerfService 创建服务实例。
 func NewPerfService() *PerfService {
 	p := &PerfService{
-		client:  device.NewClient(),
-		session: collector.NewSession(0),
-		adbRun:  adbforward.DefaultRun,
-		emit:    func(string, any) {},
-		tickReq: make(chan struct{}, 1),
-		stopUI:  make(chan struct{}),
+		client:    device.NewClient(),
+		session:   collector.NewSession(0),
+		adbRun:    adbforward.DefaultRun,
+		emit:      func(string, any) {},
+		recording: true,
+		tickReq:   make(chan struct{}, 1),
+		stopUI:    make(chan struct{}),
 	}
 	go p.uiLoop()
 	return p
@@ -231,6 +249,9 @@ func (p *PerfService) connectTCP(host string, port int, transport string) (proto
 	}
 	p.session.Clear()
 	p.transport = transport
+	p.recording = true
+	p.sourceFile = ""
+	p.loadedHS = protocol.Handshake{}
 	p.mu.Unlock()
 
 	hs, err := p.client.Connect(host, port, p.onFrame, p.onClosed)
@@ -243,6 +264,14 @@ func (p *PerfService) connectTCP(host string, port int, transport string) (proto
 	}
 	p.logf("已连接 %s:%d(%s): 设备=%q 系统=%q 引擎=%q 流版本=%#x",
 		host, port, transport, hs.DeviceName, hs.OS, hs.UnityVersion, hs.ProfilerStreamVersion)
+	p.mu.Lock()
+	deep, stacks := p.deep, p.callStacks
+	p.mu.Unlock()
+	if deep || stacks {
+		if err := p.client.SetProfilerOptions(deep, stacks); err != nil {
+			p.logf("下发 Deep Profile/Call Stacks 失败: %v", err)
+		}
+	}
 	p.notifyUI()
 	return hs, nil
 }
@@ -275,17 +304,31 @@ func (p *PerfService) Disconnect() {
 func (p *PerfService) Status() Status {
 	p.mu.Lock()
 	transport := p.transport
+	recording := p.recording
+	sourceFile := p.sourceFile
+	loadedHS := p.loadedHS
+	deep := p.deep
+	callStacks := p.callStacks
 	p.mu.Unlock()
 	hs, _ := p.client.Handshake()
+	if hs == (protocol.Handshake{}) {
+		hs = loadedHS
+	}
 	connected := p.client.Connected()
 	return Status{
-		Connected:      connected,
-		Mode:           "profiler",
-		Transport:      transport,
-		Device:         hs,
-		TotalFrames:    p.session.Total(),
-		Retained:       p.session.Len(),
-		UnitySupported: connected && hs.Supported(),
+		Connected:                  connected,
+		Mode:                       "profiler",
+		Transport:                  transport,
+		Device:                     hs,
+		TotalFrames:                p.session.Total(),
+		Retained:                   p.session.Len(),
+		UnitySupported:             connected && hs.Supported(),
+		Recording:                  recording,
+		SourceFile:                 sourceFile,
+		DeepProfiling:              deep,
+		CallStacks:                 callStacks,
+		DeepProfilerSupported:      hs.DeepProfilerSupported,
+		ManagedCallstacksSupported: hs.ManagedCallstacksSupported,
 	}
 }
 
@@ -315,7 +358,108 @@ func (p *PerfService) Stats() collector.Stats {
 
 func (p *PerfService) Clear() {
 	p.session.Clear()
+	p.mu.Lock()
+	p.sourceFile = ""
+	p.loadedHS = protocol.Handshake{}
+	p.mu.Unlock()
 	p.notifyUI()
+}
+
+// SetRecording 开关抓取。连接保持不变；暂停时丢弃新到的帧，已采集数据保留。
+func (p *PerfService) SetRecording(on bool) {
+	p.mu.Lock()
+	p.recording = on
+	p.mu.Unlock()
+	p.logf("采集开关: recording=%v", on)
+	p.notifyUI()
+}
+
+// SetDeepProfiling 开关 Deep Profile。连接后立即下发给 Player，影响后续帧。
+func (p *PerfService) SetDeepProfiling(on bool) error {
+	p.mu.Lock()
+	p.deep = on
+	stacks := p.callStacks
+	p.mu.Unlock()
+	p.logf("Deep Profile: %v", on)
+	if p.client.Connected() {
+		if err := p.client.SetProfilerOptions(on, stacks); err != nil {
+			return err
+		}
+	}
+	p.notifyUI()
+	return nil
+}
+
+// SetCallStacks 开关 Call Stacks（GC.Alloc 等采样的托管调用栈）。
+func (p *PerfService) SetCallStacks(on bool) error {
+	p.mu.Lock()
+	p.callStacks = on
+	deep := p.deep
+	p.mu.Unlock()
+	p.logf("Call Stacks: %v", on)
+	if p.client.Connected() {
+		if err := p.client.SetProfilerOptions(deep, on); err != nil {
+			return err
+		}
+	}
+	p.notifyUI()
+	return nil
+}
+
+// FrameHierarchy 返回选中帧的 CPU Hierarchy。
+func (p *PerfService) FrameHierarchy(index int) []protocol.SampleNode {
+	h, ok := p.session.HierarchyAt(index)
+	if !ok {
+		return nil
+	}
+	return h
+}
+
+// ExportCapture 将当前会话导出为紧凑二进制 .upac 文件。
+func (p *PerfService) ExportCapture(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("导出路径为空")
+	}
+	hs, _ := p.client.Handshake()
+	p.mu.Lock()
+	if hs == (protocol.Handshake{}) {
+		hs = p.loadedHS
+	}
+	p.mu.Unlock()
+	frames := p.session.Range(0, p.session.Len())
+	if len(frames) == 0 {
+		return errors.New("没有可导出的帧数据")
+	}
+	if err := capture.SaveFile(path, capture.File{Handshake: hs, Frames: frames}); err != nil {
+		return err
+	}
+	p.logf("已导出 %d 帧 -> %s", len(frames), path)
+	return nil
+}
+
+// ImportCapture 加载紧凑二进制存档并替换当前会话数据。
+// 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
+func (p *PerfService) ImportCapture(path string) (int, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return 0, errors.New("加载路径为空")
+	}
+	file, err := capture.LoadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	p.session.Replace(file.Frames)
+	p.mu.Lock()
+	p.sourceFile = path
+	p.loadedHS = file.Handshake
+	if p.connectedLocked() {
+		p.recording = false
+	}
+	p.mu.Unlock()
+	p.logf("已加载 %d 帧 <- %s", len(file.Frames), path)
+	p.notifyUI()
+	return p.session.Len(), nil
 }
 
 func (p *PerfService) Analyze() analyzer.Report {
@@ -350,8 +494,14 @@ func (p *PerfService) Diagnose(ctx context.Context) (string, error) {
 //
 // 绝不能在这里直接推送事件：事件推送要经过 webview，一旦卡住就会把读取循环拖死，
 // 表现为界面显示"已连接"却永远 0 帧，同时连接还占着 Player 唯一的 Profiler 槽位。
-func (p *PerfService) onFrame(f protocol.FrameData) {
-	p.session.Append(f)
+func (p *PerfService) onFrame(f protocol.FrameData, hierarchy []protocol.SampleNode) {
+	p.mu.Lock()
+	recording := p.recording
+	p.mu.Unlock()
+	if !recording {
+		return
+	}
+	p.session.AppendDetail(f, hierarchy)
 	p.notifyUI()
 }
 
@@ -385,10 +535,14 @@ func (p *PerfService) uiLoop() {
 		case <-p.tickReq:
 		case <-ticker.C:
 		}
+		p.mu.Lock()
+		recording := p.recording
+		p.mu.Unlock()
 		ev := TickEvent{
 			TotalFrames: p.session.Total(),
 			Retained:    p.session.Len(),
 			Connected:   p.connected(),
+			Recording:   recording,
 		}
 		if ev != last {
 			last = ev

@@ -172,12 +172,12 @@ func (c *cursor) take(n int) []byte {
 	return v
 }
 
-func (c *cursor) u8() byte     { return c.take(1)[0] }
-func (c *cursor) u16() uint16  { return binary.LittleEndian.Uint16(c.take(2)) }
-func (c *cursor) u32() uint32  { return binary.LittleEndian.Uint32(c.take(4)) }
-func (c *cursor) i32() int32   { return int32(c.u32()) }
-func (c *cursor) i64() int64   { return int64(binary.LittleEndian.Uint64(c.take(8))) }
-func (c *cursor) peek() byte   { return c.b[c.p] }
+func (c *cursor) u8() byte      { return c.take(1)[0] }
+func (c *cursor) u16() uint16   { return binary.LittleEndian.Uint16(c.take(2)) }
+func (c *cursor) u32() uint32   { return binary.LittleEndian.Uint32(c.take(4)) }
+func (c *cursor) i32() int32    { return int32(c.u32()) }
+func (c *cursor) i64() int64    { return int64(binary.LittleEndian.Uint64(c.take(8))) }
+func (c *cursor) peek() byte    { return c.b[c.p] }
 func (c *cursor) hasMore() bool { return c.p < len(c.b) }
 
 func (c *cursor) str() string { return string(c.take(int(c.u32()))) }
@@ -301,16 +301,27 @@ type sampleEntry struct {
 	markerID uint32
 	startNS  int64
 	childNS  int64
+	kids     []*treeNode
+	meta     []value
+}
+
+// treeNode 是一帧主线程采样树中的一个节点（尚未合并同名兄弟）。
+type treeNode struct {
+	markerID uint32
+	totalNS  int64
+	selfNS   int64
+	kids     []*treeNode
+	meta     []value
 }
 
 // DecodeStats 是解码过程的可观测指标，便于自检与排障。
 type DecodeStats struct {
-	Chunks          int
-	MetaRecords     int
-	EventRecords    int
-	Frames          int
-	DroppedChunks   int
-	SkippedThreads  int
+	Chunks         int
+	MetaRecords    int
+	EventRecords   int
+	Frames         int
+	DroppedChunks  int
+	SkippedThreads int
 	// DesyncedThreads 是被放弃的非主线程流条数；它们只贡献计数器，丢掉不影响逐帧指标。
 	DesyncedThreads int
 	Desynced        bool
@@ -335,6 +346,8 @@ type FrameSnapshot struct {
 	CategoryNS map[string]int64
 	// Counters 是该帧的计数器取值，键为 `分类/名字`。
 	Counters map[string]float64
+	// Hierarchy 是主线程 CPU 采样树，Deep Profile 开启后会包含脚本方法。
+	Hierarchy []protocol.SampleNode
 }
 
 // Decoder 把 Profiler 原始数据流解成逐帧数据。
@@ -343,15 +356,15 @@ type FrameSnapshot struct {
 // 因为渲染统计（Draw Calls 等）由渲染线程上报。任一非主线程流失步只会被单独
 // 放弃，不影响逐帧指标。
 type Decoder struct {
-	header    StreamHeader
-	haveHead  bool
-	meta      *metaTables
-	streams   map[int64]*threadStream
-	frame     *frameAccum
-	onFrame   SnapshotHandler
-	stats     DecodeStats
-	metaDone  bool
-	skipTIDs  map[int64]bool
+	header   StreamHeader
+	haveHead bool
+	meta     *metaTables
+	streams  map[int64]*threadStream
+	frame    *frameAccum
+	onFrame  SnapshotHandler
+	stats    DecodeStats
+	metaDone bool
+	skipTIDs map[int64]bool
 }
 
 type frameAccum struct {
@@ -360,6 +373,7 @@ type frameAccum struct {
 	rootNS     int64
 	categoryNS map[uint16]int64
 	counters   map[uint32]float64
+	roots      []*treeNode
 }
 
 // NewDecoder 创建解码器。
@@ -602,8 +616,12 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 		c.str()
 	default:
 		if t >= 0x01 && t <= 0x0F {
-			// 记录类型即随后的元数据取值个数。
-			c.values(int(t))
+			// 记录类型即随后的元数据取值个数（Begin 之后的 Call Stack / GC.Alloc 大小）。
+			vals := c.values(int(t))
+			if len(st.stack) > 0 {
+				top := &st.stack[len(st.stack)-1]
+				top.meta = append(top.meta, cloneValues(vals)...)
+			}
 			break
 		}
 		key := fmt.Sprintf("0x%02x", t)
@@ -627,18 +645,26 @@ func (d *Decoder) closeSample(st *threadStream, endNS int64) {
 	if len(st.stack) > 0 {
 		st.stack[len(st.stack)-1].childNS += dur
 	}
-	if d.frame == nil || !st.isMain {
-		return
-	}
 	self := dur - top.childNS
 	if self < 0 {
 		self = 0
 	}
+	node := &treeNode{markerID: top.markerID, totalNS: dur, selfNS: self, kids: top.kids, meta: top.meta}
+	if len(st.stack) > 0 {
+		parent := &st.stack[len(st.stack)-1]
+		parent.kids = append(parent.kids, node)
+	}
+	if d.frame == nil || !st.isMain {
+		return
+	}
 	if info, ok := d.meta.markers[top.markerID]; ok {
 		d.frame.categoryNS[info.Category] += self
 	}
-	if len(st.stack) == 0 && dur > d.frame.rootNS {
-		d.frame.rootNS = dur
+	if len(st.stack) == 0 {
+		d.frame.roots = append(d.frame.roots, node)
+		if dur > d.frame.rootNS {
+			d.frame.rootNS = dur
+		}
 	}
 }
 
@@ -667,6 +693,7 @@ func (a *frameAccum) emit(d *Decoder, endNS int64) {
 		RootNS:     a.rootNS,
 		CategoryNS: make(map[string]int64, len(a.categoryNS)),
 		Counters:   make(map[string]float64, len(a.counters)),
+		Hierarchy:  buildHierarchy(d, a.roots),
 	}
 	for cat, ns := range a.categoryNS {
 		snap.CategoryNS[d.meta.categoryName(cat)] += ns

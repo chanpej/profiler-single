@@ -42,7 +42,8 @@ var (
 
 // Editor → Player 的消息 ID。
 var (
-	// MsgIDProfilerSetup 在连接建立后立即发送，body 为 u32(0)。
+	// MsgIDProfilerSetup 在连接建立后立即发送，body 为 u32 标志。
+	// 连接时 Editor 发送 0；之后再次下发以切换 Deep Profile / Call Stacks。
 	MsgIDProfilerSetup = MessageID{0x4c, 0xd8, 0x90, 0xf7, 0xf8, 0xae, 0x64, 0x43, 0x49, 0x8b, 0x0f, 0xb8, 0xb0, 0x55, 0x0d, 0xa5}
 	// MsgIDProfilerAreas 用 u32 位掩码开启/关闭 ProfilerArea；0 表示停止采集。
 	MsgIDProfilerAreas = MessageID{0x22, 0x75, 0x64, 0xd6, 0xe0, 0xe0, 0x74, 0xad, 0x98, 0x28, 0xc6, 0x0f, 0xe4, 0x86, 0x31, 0xc5}
@@ -158,6 +159,8 @@ func EncodePlayerEngineInfo(platform uint32, major, minor, patch, releaseType, r
 	body := make([]byte, PlayerInfoBodySize)
 	le := binary.LittleEndian
 	le.PutUint32(body[0:4], 2)
+	body[4] = 1 // DeepProfilerSupported
+	body[5] = 1 // ManagedCallstacksSupported
 	le.PutUint32(body[7:11], platform)
 	le.PutUint32(body[11:15], major)
 	le.PutUint32(body[15:19], minor)
@@ -186,6 +189,33 @@ func AnnouncementFromBody(body []byte) string {
 		return ""
 	}
 	return strings.TrimSpace(s[i:])
+}
+
+// MsgIDProfilerSetup 报文体的标志位（连接时为 0）。
+const (
+	SetupFlagDeepProfiling = uint32(1 << 0)
+	SetupFlagCallStacks    = uint32(1 << 1)
+)
+
+// EncodeSetupFlags 生成 MsgIDProfilerSetup 报文体。
+func EncodeSetupFlags(deep, callStacks bool) []byte {
+	var flags uint32
+	if deep {
+		flags |= SetupFlagDeepProfiling
+	}
+	if callStacks {
+		flags |= SetupFlagCallStacks
+	}
+	return EncodeAreaMask(flags)
+}
+
+// ParseSetupFlags 解析 MsgIDProfilerSetup 报文体。
+func ParseSetupFlags(body []byte) (deep, callStacks bool) {
+	if len(body) < 4 {
+		return false, false
+	}
+	flags := binary.LittleEndian.Uint32(body)
+	return flags&SetupFlagDeepProfiling != 0, flags&SetupFlagCallStacks != 0
 }
 
 // EncodeAreaMask 生成 MsgIDProfilerAreas 报文体。

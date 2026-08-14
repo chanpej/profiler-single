@@ -2,7 +2,8 @@
 // 绑定层的 Go 切片可能为 null，这里统一归一化为空数组。
 import { Events } from '@wailsio/runtime';
 import * as PerfService from '../bindings/unityperfagent/services/perfservice.js';
-import type { FrameData, Handshake, LLMConfig, Report, Stats, Status, TickEvent } from './types';
+import type { FrameData, Handshake, LLMConfig, Report, SampleNode, Stats, Status, TickEvent } from './types';
+import { normalizeSampleTree } from './lib/sample';
 
 export const api = {
   connectUSB: (serial = '', packageId = ''): Promise<Handshake> => PerfService.ConnectUSB(serial, packageId),
@@ -16,6 +17,13 @@ export const api = {
   analyze: (): Promise<Report> =>
     PerfService.Analyze().then((r) => ({ ...r, issues: r.issues ?? [] }) as Report),
   clear: (): Promise<void> => PerfService.Clear(),
+  setRecording: (on: boolean): Promise<void> => PerfService.SetRecording(on),
+  exportCapture: (path: string): Promise<void> => PerfService.ExportCapture(path),
+  importCapture: (path: string): Promise<number> => PerfService.ImportCapture(path),
+  setDeepProfiling: (on: boolean): Promise<void> => PerfService.SetDeepProfiling(on),
+  setCallStacks: (on: boolean): Promise<void> => PerfService.SetCallStacks(on),
+  frameHierarchy: (index: number): Promise<SampleNode[]> =>
+    PerfService.FrameHierarchy(index).then((rows) => normalizeSampleTree(rows)),
   diagnose: (): Promise<string> => PerfService.Diagnose(),
   llmConfig: (): Promise<LLMConfig> =>
     PerfService.LLMConfig().then((cfg) => ({

@@ -6,7 +6,11 @@ import (
 	"errors"
 	"io"
 	"math"
+	"sync"
 	"testing"
+	"time"
+
+	"unityperfagent/internal/protocol"
 )
 
 // 以下固件全部截自 Unity 2022.3 Editor 与 Android 真机（示例游戏，包 com.company.game）
@@ -525,4 +529,164 @@ func TestDeviceModelFromID(t *testing.T) {
 			t.Fatalf("deviceModelFromID(%q)=%q，期望 %q", id, got, want)
 		}
 	}
+}
+
+func TestEncodeSetupFlags(t *testing.T) {
+	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(false, false)); deep || stacks {
+		t.Fatal("zero flags should be off")
+	}
+	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(true, false)); !deep || stacks {
+		t.Fatalf("deep=%v stacks=%v", deep, stacks)
+	}
+	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(false, true)); deep || !stacks {
+		t.Fatalf("deep=%v stacks=%v", deep, stacks)
+	}
+	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(true, true)); !deep || !stacks {
+		t.Fatalf("deep=%v stacks=%v", deep, stacks)
+	}
+}
+
+func TestEncodePlayerEngineInfoCapabilities(t *testing.T) {
+	body := EncodePlayerEngineInfo(platformAndroid, 2022, 3, 47, 2, 1)
+	info, err := ParsePlayerEngineInfo(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.DeepProfilerSupported || !info.ManagedCallstacksSupported {
+		t.Fatalf("假 Player 应声明 Deep Profile / Call Stacks 能力: %+v", info)
+	}
+	if info.Version != "2022.3.47f1" {
+		t.Fatalf("version=%q", info.Version)
+	}
+}
+
+func TestDecoderBuildsHierarchyAndCallstack(t *testing.T) {
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(EncodeStreamHeader(StreamHeader{
+		FormatVersion: Unity2022StreamVersion, MainThreadID: captureMainThreadID,
+	}, 2022, 3, 47, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catScripts, "Scripts")
+	meta.CategoryDef(catGC, "GC")
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkScripts, 0, catScripts, "BehaviourUpdate")
+	meta.MarkerDef(mkPlayerUpd, 0, catScripts, "PlayerController.Update")
+	meta.MarkerDef(mkGCAlloc, 0, catGC, "GC.Alloc")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	const ns = int64(1_000_000)
+	var ev RecordWriter
+	ev.FrameBoundary(1, 0)
+	ev.Begin(mkMainThread, 0)
+	ev.Begin(mkScripts, 0)
+	ev.Begin(mkPlayerUpd, 0)
+	ev.Begin(mkGCAlloc, ns)
+	ev.Int64Meta(4096)
+	ev.StringMeta("GC.Alloc\nPlayerController.Update ()")
+	ev.End(mkGCAlloc, ns+1000)
+	ev.End(mkPlayerUpd, 4*ns)
+	ev.End(mkScripts, 5*ns)
+	ev.End(mkMainThread, 10*ns)
+	ev.FrameBoundary(2, 10*ns)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if snap == nil {
+		t.Fatalf("未解出帧: %+v", d.Stats())
+	}
+	if !hierarchyHas(snap.Hierarchy, "PlayerController.Update") {
+		t.Fatalf("缺少 Deep Profile 方法: %+v", snap.Hierarchy)
+	}
+	alloc := findSample(snap.Hierarchy, "GC.Alloc")
+	if alloc == nil {
+		t.Fatal("缺少 GC.Alloc")
+	}
+	if alloc.GCAllocKB < 3.9 || alloc.GCAllocKB > 4.1 {
+		t.Fatalf("GC.Alloc KB=%v", alloc.GCAllocKB)
+	}
+	if len(alloc.Callstack) < 2 {
+		t.Fatalf("callstack=%v", alloc.Callstack)
+	}
+}
+
+func TestMergeSampleNodesSumsCalls(t *testing.T) {
+	got := mergeSampleNodes([]protocol.SampleNode{
+		{Name: "Update", Category: "Scripts", TotalMs: 1, SelfMs: 0.5, Calls: 1},
+		{Name: "Update", Category: "Scripts", TotalMs: 2, SelfMs: 1, Calls: 1, Callstack: []string{"A"}},
+		{Name: "LateUpdate", Category: "Scripts", TotalMs: 0.4, SelfMs: 0.4, Calls: 1},
+	})
+	if len(got) != 2 {
+		t.Fatalf("len=%d", len(got))
+	}
+	if got[0].Name != "Update" || got[0].Calls != 2 || got[0].TotalMs != 3 {
+		t.Fatalf("merged=%+v", got[0])
+	}
+	if len(got[0].Callstack) != 1 {
+		t.Fatalf("callstack should keep first non-empty: %v", got[0].Callstack)
+	}
+}
+
+func hierarchyHas(nodes []protocol.SampleNode, name string) bool {
+	return findSample(nodes, name) != nil
+}
+
+func findSample(nodes []protocol.SampleNode, name string) *protocol.SampleNode {
+	for i := range nodes {
+		if nodes[i].Name == name {
+			return &nodes[i]
+		}
+		if found := findSample(nodes[i].Children, name); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func TestSessionDeepProfileAndCallStacks(t *testing.T) {
+	p := NewPlayer()
+	p.Interval = 5 * time.Millisecond
+	port, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	var mu sync.Mutex
+	var last []protocol.SampleNode
+	sess := NewSession()
+	hs, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+		mu.Lock()
+		last = h
+		mu.Unlock()
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if !hs.DeepProfilerSupported || !hs.ManagedCallstacksSupported {
+		t.Fatalf("capabilities: %+v", hs)
+	}
+	if err := sess.SetProfilerOptions(true, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		h := last
+		mu.Unlock()
+		if hierarchyHas(h, "PlayerController.Update") && hierarchyHas(h, "GC.Alloc") {
+			if alloc := findSample(h, "GC.Alloc"); alloc == nil || len(alloc.Callstack) == 0 {
+				t.Fatal("GC.Alloc 应带调用栈")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("超时未收到 Deep Profile / Call Stacks 采样")
 }

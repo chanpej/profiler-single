@@ -11,6 +11,7 @@ interface Props {
   height?: number;
   onSelectFrame: (index: number) => void;
   onActivate: () => void;
+  onWheel?: (e: React.WheelEvent<HTMLElement>) => void;
 }
 
 const GRID = 'rgba(148, 163, 184, 0.14)';
@@ -25,14 +26,15 @@ function indexFromClick(clientX: number, wrap: HTMLElement, count: number): numb
 }
 
 /**
- * Unity Profiler 风格模块图：左侧图例 + 右侧 Canvas 堆叠/叠加柱。
- * 点击图表选帧，点击整行激活该模块的详情面板。
+ * Unity Profiler 风格模块图：左侧图例（含当前帧数值）+ 右侧 Canvas 堆叠/叠加柱。
+ * 点击或拖拽图表选帧，点击整行激活该模块的详情面板。
  */
 export function ProfilerChart({
-  module, frames, selectedIndex, active, height = 88, onSelectFrame, onActivate,
+  module, frames, selectedIndex, active, height = 88, onSelectFrame, onActivate, onWheel,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const dragging = useRef(false);
   const series = useMemo(() => extractModuleSeries(module, frames), [module, frames]);
   const maxY = useMemo(() => chartMax(module, series), [module, series]);
   const headline = frames[selectedIndex] ? module.headline(frames[selectedIndex]) : null;
@@ -70,6 +72,7 @@ export function ProfilerChart({
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
           ctx.stroke();
+          ctx.fillText(`${ref.toFixed(1)}ms`, 4, Math.max(10, y - 2));
         }
       }
 
@@ -118,6 +121,11 @@ export function ProfilerChart({
     return () => ro.disconnect();
   }, [frames, height, maxY, module, selectedIndex, series]);
 
+  const pick = (clientX: number) => {
+    if (!wrapRef.current || frames.length === 0) return;
+    onSelectFrame(indexFromClick(clientX, wrapRef.current, frames.length));
+  };
+
   return (
     <div
       className={`profiler-chart ${active ? 'is-active' : ''}`}
@@ -131,22 +139,41 @@ export function ProfilerChart({
           {headline ? formatProfilerValue(headline.value, headline.unit) : '--'}
         </div>
         <ul className="profiler-legend">
-          {module.categories.map((c) => (
-            <li key={c.id}>
-              <span className="swatch" style={{ background: c.color }} />
-              {c.label}
-            </li>
-          ))}
+          {series.map((s) => {
+            const value = s.values[selectedIndex];
+            return (
+              <li key={s.id}>
+                <span className="swatch" style={{ background: s.color }} />
+                <span className="profiler-legend-label">{s.label}</span>
+                <span className="mono profiler-legend-val">
+                  {value == null ? '' : formatProfilerValue(value, s.unit)}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
       <div
         ref={wrapRef}
         className="profiler-chart-canvas"
-        onClick={(e) => {
+        title="滚轮缩放，Shift+滚轮平移"
+        onWheel={onWheel}
+        onPointerDown={(e) => {
           e.stopPropagation();
           onActivate();
-          if (!wrapRef.current || frames.length === 0) return;
-          onSelectFrame(indexFromClick(e.clientX, wrapRef.current, frames.length));
+          dragging.current = true;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          pick(e.clientX);
+        }}
+        onPointerMove={(e) => {
+          if (!dragging.current) return;
+          pick(e.clientX);
+        }}
+        onPointerUp={() => {
+          dragging.current = false;
+        }}
+        onPointerCancel={() => {
+          dragging.current = false;
         }}
       >
         <canvas ref={canvasRef} />

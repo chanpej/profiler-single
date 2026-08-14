@@ -72,4 +72,25 @@ export interface Handshake {
      * ProfilerStreamVersion 是 Player Profiler 数据流的格式版本，采集开始后才有值。
      */
     "profilerStreamVersion": number;
+
+    /**
+     * DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 引擎信息能力位。
+     */
+    "deepProfilerSupported": boolean;
+    "managedCallstacksSupported": boolean;
+}
+
+/**
+ * SampleNode 是 CPU Hierarchy 中的一个采样（对应 Unity Profiler Hierarchy 一行）。
+ * 不进入 164 字节帧快照，仅随选中帧的详情接口下发。
+ */
+export interface SampleNode {
+    "name": string;
+    "category": string;
+    "totalMs": number;
+    "selfMs": number;
+    "calls": number;
+    "gcAllocKB": number;
+    "callstack"?: string[] | null;
+    "children"?: SampleNode[] | null;
 }

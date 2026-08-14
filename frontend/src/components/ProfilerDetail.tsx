@@ -1,18 +1,21 @@
-import { useState } from 'react';
-import type { FrameData, ProfilerModuleId } from '../types';
+import { useMemo, useRef, useState } from 'react';
+import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
 import { memorySimpleRows, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
 import { formatCount, formatFps, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
+import { categoryColor, flattenVisible, mergeExpanded } from '../lib/hierarchy';
 
 interface Props {
   moduleId: ProfilerModuleId;
   frame: FrameData | null;
+  hierarchy?: SampleNode[];
+  callStacks?: boolean;
 }
 
 type CpuTab = 'hierarchy' | 'timeline';
 type MemTab = 'simple' | 'detailed';
 
 /** 选中帧的模块详情：还原 Unity Profiler 底部面板。 */
-export function ProfilerDetail({ moduleId, frame }: Props) {
+export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = false }: Props) {
   const [cpuTab, setCpuTab] = useState<CpuTab>('hierarchy');
   const [memTab, setMemTab] = useState<MemTab>('simple');
   const mod = moduleById(moduleId);
@@ -34,51 +37,136 @@ export function ProfilerDetail({ moduleId, frame }: Props) {
           </div>
         )}
       </div>
-      {!frame ? (
-        <p className="dim">选择一帧以查看详情</p>
-      ) : moduleId === 'cpu' && cpuTab === 'timeline' ? (
-        <CpuTimeline frame={frame} />
-      ) : moduleId === 'memory' && memTab === 'detailed' ? (
-        <p className="dim">Detailed 视图需要 Unity 内存快照，当前采集通道仅提供 Simple 计数器。</p>
-      ) : moduleId === 'memory' ? (
-        <MemorySimple frame={frame} />
-      ) : moduleId === 'rendering' ? (
-        (frame.drawCalls > 0 || frame.batches > 0)
-          ? <CounterTable rows={renderingCounters(frame).map((r) => ({ label: r.label, value: formatCount(r.value) }))} />
-          : <CounterTable rows={[
-            { label: 'Frame Time', value: formatMs(frameTimeMs(frame)) },
-            { label: 'FPS', value: formatFps(frame.fps) },
+      <div className="profiler-detail-body">
+        {!frame ? (
+          <p className="dim">选择一帧以查看详情</p>
+        ) : moduleId === 'cpu' && cpuTab === 'timeline' ? (
+          <CpuTimeline frame={frame} />
+        ) : moduleId === 'cpu' && cpuTab === 'hierarchy' && hierarchy.length > 0 ? (
+          <SampleHierarchy nodes={hierarchy} callStacks={callStacks} />
+        ) : moduleId === 'memory' && memTab === 'detailed' ? (
+          <p className="dim">Detailed 视图需要 Unity 内存快照，当前采集通道仅提供 Simple 计数器。</p>
+        ) : moduleId === 'memory' ? (
+          <MemorySimple frame={frame} />
+        ) : moduleId === 'rendering' ? (
+          (frame.drawCalls > 0 || frame.batches > 0)
+            ? <CounterTable rows={renderingCounters(frame).map((r) => ({ label: r.label, value: formatCount(r.value) }))} />
+            : <CounterTable rows={[
+              { label: 'Frame Time', value: formatMs(frameTimeMs(frame)) },
+              { label: 'FPS', value: formatFps(frame.fps) },
+            ]} />
+        ) : moduleId === 'audio' ? (
+          <CounterTable rows={[
+            { label: 'Playing Sources', value: String(frame.playingSources) },
+            { label: 'Audio Voices', value: String(frame.audioVoices) },
+            { label: 'Audio Memory', value: formatMB1(frame.audioUsedMB) },
           ]} />
-      ) : moduleId === 'audio' ? (
-        <CounterTable rows={[
-          { label: 'Playing Sources', value: String(frame.playingSources) },
-          { label: 'Audio Voices', value: String(frame.audioVoices) },
-          { label: 'Audio Memory', value: formatMB1(frame.audioUsedMB) },
-        ]} />
-      ) : moduleId === 'physics' ? (
-        <CounterTable rows={[
-          { label: 'Active Rigidbodies', value: String(frame.activeRigidbodies) },
-          { label: 'Colliders', value: String(frame.colliders) },
-          { label: 'Physics CPU', value: formatMs(frame.cpuPhysicsMs) },
-        ]} />
-      ) : moduleId === 'ui' ? (
-        <CounterTable rows={[
-          { label: 'UI Batches', value: String(frame.uiBatches) },
-          { label: 'UI Vertices', value: formatCount(frame.uiVertices) },
-          { label: 'UI CPU', value: formatMs(frame.cpuUiMs) },
-        ]} />
-      ) : moduleId === 'video' ? (
-        <CounterTable rows={[
-          { label: 'Video Memory', value: formatMB1(frame.videoUsedMB) },
-        ]} />
-      ) : moduleId === 'gpu' ? (
-        <CounterTable rows={[
-          { label: 'GPU Time', value: formatMs(gpuOrFrameMs(frame)) },
-          { label: 'Frame Time', value: formatMs(frameTimeMs(frame)) },
-          { label: 'Render Thread', value: formatMs(frame.renderMs) },
-        ]} />
-      ) : (
-        <HierarchyTable rows={moduleBreakdown(mod, frame)} />
+        ) : moduleId === 'physics' ? (
+          <CounterTable rows={[
+            { label: 'Active Rigidbodies', value: String(frame.activeRigidbodies) },
+            { label: 'Colliders', value: String(frame.colliders) },
+            { label: 'Physics CPU', value: formatMs(frame.cpuPhysicsMs) },
+          ]} />
+        ) : moduleId === 'ui' ? (
+          <CounterTable rows={[
+            { label: 'UI Batches', value: String(frame.uiBatches) },
+            { label: 'UI Vertices', value: formatCount(frame.uiVertices) },
+            { label: 'UI CPU', value: formatMs(frame.cpuUiMs) },
+          ]} />
+        ) : moduleId === 'video' ? (
+          <CounterTable rows={[
+            { label: 'Video Memory', value: formatMB1(frame.videoUsedMB) },
+          ]} />
+        ) : moduleId === 'gpu' ? (
+          <CounterTable rows={[
+            { label: 'GPU Time', value: formatMs(gpuOrFrameMs(frame)) },
+            { label: 'Frame Time', value: formatMs(frameTimeMs(frame)) },
+            { label: 'Render Thread', value: formatMs(frame.renderMs) },
+          ]} />
+        ) : (
+          <HierarchyTable rows={moduleBreakdown(mod, frame)} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStacks: boolean }) {
+  const touched = useRef(new Set<string>());
+  const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), nodes, touched.current));
+  const [selected, setSelected] = useState<string>('');
+
+  const visibleExpanded = useMemo(
+    () => mergeExpanded(expanded, nodes, touched.current),
+    [expanded, nodes],
+  );
+  const rows = useMemo(() => flattenVisible(nodes, visibleExpanded), [nodes, visibleExpanded]);
+  const selectedRow = rows.find((r) => r.path === selected);
+  const stack = selectedRow?.node.callstack ?? [];
+
+  return (
+    <div className="sample-hierarchy" data-testid="cpu-hierarchy">
+      <table className="profiler-table">
+        <thead>
+          <tr>
+            <th>Overview</th>
+            <th>Total</th>
+            <th>Self</th>
+            <th>Calls</th>
+            <th>GC Alloc</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr
+              key={r.path}
+              className={selected === r.path ? 'is-selected' : ''}
+              onClick={() => setSelected(r.path)}
+            >
+              <td>
+                <span className="hierarchy-cell" style={{ paddingLeft: r.depth * 14 }}>
+                  {r.hasChildren ? (
+                    <button
+                      type="button"
+                      className="hierarchy-toggle"
+                      aria-label={visibleExpanded.has(r.path) ? '折叠' : '展开'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        touched.current.add(r.path);
+                        setExpanded((cur) => {
+                          const next = new Set(mergeExpanded(cur, nodes, touched.current));
+                          if (next.has(r.path)) next.delete(r.path);
+                          else next.add(r.path);
+                          return next;
+                        });
+                      }}
+                    >
+                      {visibleExpanded.has(r.path) ? '▾' : '▸'}
+                    </button>
+                  ) : (
+                    <span className="hierarchy-toggle is-leaf" />
+                  )}
+                  <span className="swatch" style={{ background: categoryColor(r.node.category) }} />
+                  {r.node.name}
+                </span>
+              </td>
+              <td className="mono">{formatMs(r.node.totalMs)}</td>
+              <td className="mono">{formatMs(r.node.selfMs)}</td>
+              <td className="mono">{r.node.calls}</td>
+              <td className="mono">{r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {callStacks && (
+        <div className="callstack-pane" data-testid="callstack-pane">
+          <h3>Call Stacks</h3>
+          {stack.length > 0 ? (
+            <pre className="callstack-list">{stack.join('\n')}</pre>
+          ) : (
+            <p className="dim">选择带调用栈的采样（如 GC.Alloc）。未记录时请确认 Player 已开启 Call Stacks。</p>
+          )}
+        </div>
       )}
     </div>
   );

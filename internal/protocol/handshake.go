@@ -23,6 +23,9 @@ type Handshake struct {
 	AppVersion   string `json:"appVersion"`
 	// ProfilerStreamVersion 是 Player Profiler 数据流的格式版本，采集开始后才有值。
 	ProfilerStreamVersion uint32 `json:"profilerStreamVersion"`
+	// DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 引擎信息能力位。
+	DeepProfilerSupported      bool `json:"deepProfilerSupported"`
+	ManagedCallstacksSupported bool `json:"managedCallstacksSupported"`
 }
 
 // IsSupportedUnityVersion 判断 Unity 版本号是否被支持（仅 2022.x）。
