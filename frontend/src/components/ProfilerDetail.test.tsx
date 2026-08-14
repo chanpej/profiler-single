@@ -106,6 +106,34 @@ describe('ProfilerDetail', () => {
     expect(screen.getByTestId('callstack-pane')).toHaveTextContent('PlayerController.Update');
   });
 
+  // 真机上 GC.Alloc 在 5~7 层深，默认只展开两层，用户勾了 Call Stacks 却什么都看不到。
+  it('勾选 Call Stacks 后自动展开深处的分配采样', async () => {
+    const leaf = {
+      name: 'GC.Alloc', category: 'GC', totalMs: 0.1, selfMs: 0.1, calls: 1, gcAllocKB: 4,
+      callstack: ['0x727ff3a8c4', 'UIPanel.FillDrawCall()'],
+    };
+    const names = ['Main Thread', 'PlayerLoop', 'PreLateUpdate', 'UIPanel.LateUpdate', 'FillDrawCall'];
+    const deep = [names.reduceRight<Record<string, unknown>>((child, name) => ({
+      name, category: 'Internal', totalMs: 8, selfMs: 0, calls: 1, gcAllocKB: 4, children: [child],
+    }), leaf)] as never;
+
+    const { rerender } = render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={deep} />);
+    expect(screen.queryByText('GC.Alloc')).not.toBeInTheDocument();
+
+    rerender(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={deep} callStacks />);
+    expect(screen.getByText('GC.Alloc')).toBeInTheDocument();
+    await userEvent.click(screen.getByText('GC.Alloc'));
+    expect(screen.getByTestId('callstack-pane')).toHaveTextContent('UIPanel.FillDrawCall');
+  });
+
+  it('本帧没有带调用栈的采样时说明原因', () => {
+    const tree = [{
+      name: 'Main Thread', category: 'Internal', totalMs: 16, selfMs: 16, calls: 1, gcAllocKB: 0,
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} callStacks />);
+    expect(screen.getByTestId('callstack-pane')).toHaveTextContent('没有带调用栈的分配采样');
+  });
+
   it('收起后即使 hierarchy 被刷新为新对象也保持收起', async () => {
     const tree = [{
       name: 'Main Thread',

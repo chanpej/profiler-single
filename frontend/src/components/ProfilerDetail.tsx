@@ -93,16 +93,19 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
 
 function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStacks: boolean }) {
   const touched = useRef(new Set<string>());
-  const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), nodes, touched.current));
+  const expandOpts = { revealCallstacks: callStacks };
+  const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), nodes, touched.current, expandOpts));
   const [selected, setSelected] = useState<string>('');
 
   const visibleExpanded = useMemo(
-    () => mergeExpanded(expanded, nodes, touched.current),
-    [expanded, nodes],
+    () => mergeExpanded(expanded, nodes, touched.current, { revealCallstacks: callStacks }),
+    [expanded, nodes, callStacks],
   );
   const rows = useMemo(() => flattenVisible(nodes, visibleExpanded), [nodes, visibleExpanded]);
   const selectedRow = rows.find((r) => r.path === selected);
   const stack = selectedRow?.node.callstack ?? [];
+  // 本帧是否真的带调用栈：Player 只在发生分配的帧写调用栈，空面板要能说清是哪种"空"。
+  const frameHasStack = useMemo(() => rows.some((r) => (r.node.callstack?.length ?? 0) > 0), [rows]);
 
   return (
     <div className="sample-hierarchy" data-testid="cpu-hierarchy">
@@ -134,7 +137,7 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
                         e.stopPropagation();
                         touched.current.add(r.path);
                         setExpanded((cur) => {
-                          const next = new Set(mergeExpanded(cur, nodes, touched.current));
+                          const next = new Set(mergeExpanded(cur, nodes, touched.current, { revealCallstacks: callStacks }));
                           if (next.has(r.path)) next.delete(r.path);
                           else next.add(r.path);
                           return next;
@@ -163,8 +166,16 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
           <h3>Call Stacks</h3>
           {stack.length > 0 ? (
             <pre className="callstack-list">{stack.join('\n')}</pre>
+          ) : frameHasStack ? (
+            <p className="dim">
+              本帧带调用栈的采样已自动展开（GC.Alloc 一类的分配采样），点中它即可查看。
+              IL2CPP 包里多数栈帧是引擎原生代码，没有符号可查，显示为十六进制地址。
+            </p>
           ) : (
-            <p className="dim">选择带调用栈的采样（如 GC.Alloc）。未记录时请确认 Player 已开启 Call Stacks。</p>
+            <p className="dim">
+              本帧没有带调用栈的分配采样。调用栈只对开启 Call Stacks 之后采集的帧生效，
+              可在上方帧列表里挑一帧 GC Alloc 不为 0 的帧查看。
+            </p>
           )}
         </div>
       )}

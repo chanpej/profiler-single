@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -262,5 +263,21 @@ func TestSetDeepProfilingAndCallStacks(t *testing.T) {
 	}
 	if svc.FrameHierarchy(9) != nil {
 		t.Fatal("missing frame should return nil")
+	}
+}
+
+// 采集异常中断的原因要能带到界面上：解码失步不能只留在日志里。
+func TestStatusCarriesLastError(t *testing.T) {
+	svc := newTestService()
+	if svc.Status().LastError != "" {
+		t.Fatal("初始不应有错误")
+	}
+	svc.onClosed(errors.New("数据流解析失步"))
+	if got := svc.Status().LastError; got != "数据流解析失步" {
+		t.Fatalf("lastError=%q", got)
+	}
+	svc.onClosed(nil)
+	if got := svc.Status().LastError; got != "" {
+		t.Fatalf("正常断开应清空，实际 %q", got)
 	}
 }

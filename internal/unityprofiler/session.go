@@ -158,7 +158,7 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 
 // WriteProfilerStart 下发 Editor 打开 Profiler 时的报文序列。
 func WriteProfilerStart(w interface{ Write([]byte) (int, error) }, mask uint32, categories []string) error {
-	if err := WriteMessage(w, MsgIDProfilerSetup, EncodeSetupFlags(false, false)); err != nil {
+	if err := WriteMessage(w, MsgIDProfilerSetup, EncodeCallstackFlags(0)); err != nil {
 		return err
 	}
 	if err := WriteMessage(w, MsgIDProfilerAreas, EncodeAreaMask(mask)); err != nil {
@@ -278,14 +278,23 @@ func deviceModelFromID(id string) string {
 func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader, pending [][]byte, onFrame FrameHandler, onClosed func(error), done chan struct{}) {
 	defer close(done)
 
-	dec := NewDecoder(func(snap FrameSnapshot) {
-		if onFrame != nil {
-			onFrame(ToFrameData(snap), snap.Hierarchy)
-		}
-	})
+	// 解码出的帧先攒着，等放开会话锁之后再回调。
+	//
+	// 绝不能在持锁时回调：调用方（服务层）会在自己的锁里查会话状态（Connected 等），
+	// 反向就是"会话锁 → 调用方锁"，两条路径撞上就整个卡死——界面连日志都不再动。
+	var snaps []FrameSnapshot
+	dec := NewDecoder(func(snap FrameSnapshot) { snaps = append(snaps, snap) })
 	s.mu.Lock()
 	s.decoder = dec
 	s.mu.Unlock()
+	flush := func() {
+		for _, snap := range snaps {
+			if onFrame != nil {
+				onFrame(ToFrameData(snap), snap.Hierarchy)
+			}
+		}
+		snaps = snaps[:0]
+	}
 
 	var loopErr error
 	checkedVersion := false
@@ -294,7 +303,11 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 		s.mu.Lock()
 		_ = dec.Feed(body)
 		loopErr = s.checkStreamVersion(dec, &checkedVersion)
+		if loopErr == nil {
+			loopErr = checkDesync(dec)
+		}
 		s.mu.Unlock()
+		flush()
 		if loopErr != nil {
 			break
 		}
@@ -319,6 +332,9 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 		// 单块出错不终止采集：Feed 内部已标记失步，后续块继续尝试。
 		_ = dec.Feed(msg.Body)
 		loopErr = s.checkStreamVersion(dec, &checkedVersion)
+		if loopErr == nil {
+			loopErr = checkDesync(dec)
+		}
 		if loopErr == nil && !checkedVersion && dec.Stats().Chunks > maxChunksWithoutHeader {
 			// 没有流头就拿不到主线程 ID，所有分块都会被丢弃。此时宁可报错，
 			// 也不要让界面一直停在 0 帧却显示"已连接"。
@@ -326,6 +342,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 				dec.Stats().Chunks)
 		}
 		s.mu.Unlock()
+		flush()
 	}
 
 	s.mu.Lock()
@@ -337,6 +354,19 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 	if onClosed != nil {
 		onClosed(loopErr)
 	}
+}
+
+// checkDesync 把主线程流/元数据流失步当成致命错误。
+//
+// 这两条流一旦失步就再也解不出帧（缓冲区已丢弃，字节流无法重新对齐），
+// 继续挂着只会让界面显示"已连接"却永远停在同一帧，还白占着 Player 唯一的
+// Profiler 槽位；主动断开并报错，用户才看得见到底出了什么事。
+func checkDesync(dec *Decoder) error {
+	st := dec.Stats()
+	if !st.Desynced {
+		return nil
+	}
+	return fmt.Errorf("unityprofiler: Profiler 数据流解析失步，已停止采集：%s", st.LastError)
 }
 
 // checkStreamVersion 在数据流头到达后回填流版本并判定兼容性；调用方须持有 s.mu。
@@ -408,6 +438,10 @@ func (s *Session) Connected() bool {
 
 // SetProfilerOptions 向 Player 下发 Deep Profile / Call Stacks 开关。
 // 只影响之后的帧；已采集数据不变。未连接时返回 ErrNotConnected。
+//
+// deep 目前只记录状态、不下发：MsgIDProfilerSetup 整个 u32 逐位实测过，里面只有
+// 分配调用栈的开关，没有一位能让采样树变深，Deep Profile 应是另一条尚未逆向出的
+// 报文。此前把它塞进 bit0，反而悄悄改掉了调用栈模式。
 func (s *Session) SetProfilerOptions(deep, callStacks bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -416,8 +450,12 @@ func (s *Session) SetProfilerOptions(deep, callStacks bool) error {
 	}
 	s.deep = deep
 	s.callStacks = callStacks
+	var flags uint32
+	if callStacks {
+		flags = CallstackFlagsDefault
+	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	err := WriteMessage(s.conn, MsgIDProfilerSetup, EncodeSetupFlags(deep, callStacks))
+	err := WriteMessage(s.conn, MsgIDProfilerSetup, EncodeCallstackFlags(flags))
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	return err
 }

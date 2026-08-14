@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categoryColor, defaultExpanded, flattenVisible, mergeExpanded } from './hierarchy';
+import { callstackPaths, categoryColor, defaultExpanded, flattenVisible, mergeExpanded } from './hierarchy';
 import type { SampleNode } from '../types';
 
 const tree: SampleNode[] = [
@@ -26,6 +26,13 @@ const tree: SampleNode[] = [
   },
 ];
 
+/** 把 leaf 套进一串单链父节点里，模拟真机上很深的调用层级。 */
+function nest(names: string[], leaf: SampleNode): SampleNode {
+  return names.reduceRight<SampleNode>((child, name) => ({
+    name, category: 'Internal', totalMs: 1, selfMs: 0, calls: 1, gcAllocKB: 0, children: [child],
+  }), leaf);
+}
+
 describe('hierarchy', () => {
   it('默认展开两层（按采样名路径）', () => {
     const exp = defaultExpanded(tree, 2);
@@ -47,6 +54,32 @@ describe('hierarchy', () => {
     const got = mergeExpanded(cur, tree, touched);
     expect(got.has('Main Thread')).toBe(false);
     expect(got.has('Main Thread/BehaviourUpdate')).toBe(true);
+  });
+
+  // 真机上分配采样在 5~7 层深，默认展开两层够不到，勾了 Call Stacks 也看不到东西。
+  it('勾选 Call Stacks 时展开到深处的调用栈采样', () => {
+    const leaf: SampleNode = {
+      name: 'GC.Alloc', category: 'GC', totalMs: 0, selfMs: 0, calls: 1, gcAllocKB: 2,
+      callstack: ['0x1', 'UIPanel.FillDrawCall()'],
+    };
+    const deep: SampleNode[] = [nest(['Main Thread', 'PlayerLoop', 'Update', 'UIPanel.LateUpdate', 'FillDrawCall'], leaf)];
+
+    const paths = callstackPaths(deep);
+    expect(paths.has('Main Thread/PlayerLoop/Update/UIPanel.LateUpdate/FillDrawCall')).toBe(true);
+    // 不含调用栈的分支不该被强行展开。
+    expect(callstackPaths([nest(['A', 'B'], { ...leaf, callstack: [] })]).size).toBe(0);
+
+    const off = flattenVisible(deep, mergeExpanded(new Set(), deep, new Set()));
+    expect(off.some((r) => r.node.name === 'GC.Alloc')).toBe(false);
+
+    const on = flattenVisible(deep, mergeExpanded(new Set(), deep, new Set(), { revealCallstacks: true }));
+    expect(on.some((r) => r.node.name === 'GC.Alloc')).toBe(true);
+  });
+
+  it('用户收起的路径不会被调用栈展开覆盖', () => {
+    const touched = new Set(['Main Thread']);
+    const got = mergeExpanded(new Set(), tree, touched, { revealCallstacks: true });
+    expect(got.has('Main Thread')).toBe(false);
   });
 
   it('分类颜色', () => {

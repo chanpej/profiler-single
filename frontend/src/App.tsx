@@ -124,6 +124,8 @@ function App() {
   };
 
   const fileName = (status.sourceFile ?? '').replace(/^.*[\\/]/, '');
+  // 操作报错优先，其次显示采集异常中断的原因（如数据流解析失步）。
+  const banner = error || (status.lastError ?? '');
 
   return (
     <div className="app">
@@ -151,8 +153,8 @@ function App() {
             onUSB={() => guard(() => api.connectUSB('', packageId.trim()))}
             onClear={onClear}
           />
-          {error && (
-            <div className="error-banner" role="alert">{error}</div>
+          {banner && (
+            <div className="error-banner" role="alert">{banner}</div>
           )}
 
           <ProfilerView

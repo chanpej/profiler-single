@@ -46,6 +46,12 @@ export interface Status {
      */
     "deepProfilerSupported": boolean;
     "managedCallstacksSupported": boolean;
+
+    /**
+     * LastError 是最近一次采集异常中断的原因；正常断开或未出错时为空。
+     * 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
+     */
+    "lastError": string;
 }
 
 /**

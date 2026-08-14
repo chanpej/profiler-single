@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +35,15 @@ const (
 	// 事件流真实记录：帧边界（第 1 帧）与 Total Used Memory 取值。
 	captureFrameBoundaryHex = "220001000000df2a6c6998520000"
 	captureCounterUsedHex   = "2c00007c060000cdadbb6898520000010433889d1200000000"
+
+	// 以下三条截自开启 Call Stacks 后的同一台真机（Unity 2022.3.47f1，IL2CPP 包）。
+	// 元数据流里的托管方法符号：地址 0x71f7b5747c → UIPanel.FillDrawCall()。
+	captureMethodInfoHex = "080000000000000000007c74b5f7710000000000000036000000417373656d626c792d4353686172702d6669727374706173732e646c6c213a3a554950616e656c2e46696c6c4472617743616c6c28290000000000000000"
+	// 一次带调用栈的分配采样：UnsafeUtility.Malloc 开始 → 两条取值 → Profiler.Callstack
+	// 采集开销采样 → 25 层调用栈（0x03 后跟 0x00）→ UnsafeUtility.Malloc 结束。
+	captureAllocCallstackHex = "2a00008f04000064aa558f5c630000020408000000000000000204000000240000ce0400006dac558f5c630000250000ce040000b519598f5c63000003000000000019c4a8f37f72000000ccbed77f72000000fc739f7f72000000f4729f7f72000000ec24d3fe710000006823d3fe71000000fcd7c5f77100000034d4c5f7710000004875b5f771000000e864b5f7710000009c5eb5f771000000e0170eff710000001c170eff71000000f05cde7f72000000a083df7f7200000024d4e07f720000008c94b77f720000001c94b77f72000000900cc67f72000000b837c57f72000000f837c57f72000000f83ac57f72000000d0fceb7f72000000d035ee7f720000003c216bac720000002500008f040000fb29598f5c630000"
+	// 采样自带的 3 个元数据取值（instanceID + UTF-16 名字 + 计数），首字节同为 0x03。
+	captureSampleMeta3Hex = "030100000000091a00000055007000640061007400650057006900640067006500740073000301000000"
 )
 
 // captureMainThreadID 是流头与线程定义里一致的主线程 ID。
@@ -531,18 +542,25 @@ func TestDeviceModelFromID(t *testing.T) {
 	}
 }
 
-func TestEncodeSetupFlags(t *testing.T) {
-	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(false, false)); deep || stacks {
-		t.Fatal("zero flags should be off")
+func TestEncodeCallstackFlags(t *testing.T) {
+	for _, want := range []uint32{
+		0,
+		CallstackFlagManagedAlloc,
+		CallstackFlagNativeAlloc,
+		CallstackFlagNativeAllocator,
+		CallstackFlagsDefault,
+	} {
+		if got := ParseCallstackFlags(EncodeCallstackFlags(want)); got != want {
+			t.Fatalf("flags 往返 %#x -> %#x", want, got)
+		}
 	}
-	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(true, false)); !deep || stacks {
-		t.Fatalf("deep=%v stacks=%v", deep, stacks)
+	if ParseCallstackFlags(nil) != 0 {
+		t.Fatal("空报文体应视为未开启")
 	}
-	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(false, true)); deep || !stacks {
-		t.Fatalf("deep=%v stacks=%v", deep, stacks)
-	}
-	if deep, stacks := ParseSetupFlags(EncodeSetupFlags(true, true)); !deep || !stacks {
-		t.Fatalf("deep=%v stacks=%v", deep, stacks)
+	// 勾选 Call Stacks 必须包含托管分配那一位：GC.Alloc 的调用栈才是用户要看的，
+	// 只发原生分配位（历史实现）会导致界面上一条调用栈都没有。
+	if CallstackFlagsDefault&CallstackFlagManagedAlloc == 0 {
+		t.Fatal("默认掩码缺少托管分配调用栈")
 	}
 }
 
@@ -576,6 +594,7 @@ func TestDecoderBuildsHierarchyAndCallstack(t *testing.T) {
 	meta.MarkerDef(mkScripts, 0, catScripts, "BehaviourUpdate")
 	meta.MarkerDef(mkPlayerUpd, 0, catScripts, "PlayerController.Update")
 	meta.MarkerDef(mkGCAlloc, 0, catGC, "GC.Alloc")
+	meta.MethodDef(fakeMethodPlayerUpd, "Assembly-CSharp.dll!::PlayerController.Update()", "", 0)
 	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +607,7 @@ func TestDecoderBuildsHierarchyAndCallstack(t *testing.T) {
 	ev.Begin(mkPlayerUpd, 0)
 	ev.Begin(mkGCAlloc, ns)
 	ev.Int64Meta(4096)
-	ev.StringMeta("GC.Alloc\nPlayerController.Update ()")
+	ev.Callstack(fakeMethodPlayerUpd+0x40, fakeNativeAddr)
 	ev.End(mkGCAlloc, ns+1000)
 	ev.End(mkPlayerUpd, 4*ns)
 	ev.End(mkScripts, 5*ns)
@@ -610,8 +629,174 @@ func TestDecoderBuildsHierarchyAndCallstack(t *testing.T) {
 	if alloc.GCAllocKB < 3.9 || alloc.GCAllocKB > 4.1 {
 		t.Fatalf("GC.Alloc KB=%v", alloc.GCAllocKB)
 	}
-	if len(alloc.Callstack) < 2 {
-		t.Fatalf("callstack=%v", alloc.Callstack)
+	// 分配量必须上浮到各级祖先：GC Alloc 列是"含子树"的，父行若为 0，
+	// 用户在界面上从根往下看每行都是空的，无从知道该展开哪条分支。
+	for _, name := range []string{"Main Thread", "BehaviourUpdate", "PlayerController.Update"} {
+		anc := findSample(snap.Hierarchy, name)
+		if anc == nil {
+			t.Fatalf("缺少祖先 %s", name)
+		}
+		if anc.GCAllocKB < 3.9 || anc.GCAllocKB > 4.1 {
+			t.Fatalf("%s 的 GC Alloc 应含子树 4KB，实际 %v", name, anc.GCAllocKB)
+		}
+	}
+	// 托管帧按最近下界还原成方法名，方法表覆盖不到的原生帧保留地址。
+	want := []string{"Assembly-CSharp.dll!::PlayerController.Update()", "0x727ff3a8c4"}
+	if !reflect.DeepEqual(alloc.Callstack, want) {
+		t.Fatalf("callstack=%v，期望 %v", alloc.Callstack, want)
+	}
+}
+
+// 用真机字节验证 Call Stacks：调用栈记录（0x03 后跟 0x00）与"3 个元数据取值"
+// 记录（同为 0x03）撞号，必须各自解对，否则事件流会失步、整条流不再出帧。
+func TestDecodeCaptureCallstack(t *testing.T) {
+	const (
+		mkUnsafeMalloc  uint32 = 1167
+		mkProfCallstack uint32 = 1230
+		// 固件里那条调用栈的时间戳落在这两点之间。
+		captureAllocStartNS int64 = 0x635c8f550000
+		captureAllocEndNS   int64 = 0x635c8f5a0000
+	)
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkUnsafeMalloc, 0, catInternal, "UnsafeUtility.Malloc")
+	meta.MarkerDef(mkProfCallstack, 0, catInternal, "Profiler.Callstack")
+	meta.buf = append(meta.buf, mustHex(t, captureMethodInfoHex)...)
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	var ev RecordWriter
+	ev.FrameBoundary(1, captureAllocStartNS)
+	ev.Begin(mkMainThread, captureAllocStartNS)
+	ev.buf = append(ev.buf, mustHex(t, captureSampleMeta3Hex)...)
+	ev.buf = append(ev.buf, mustHex(t, captureAllocCallstackHex)...)
+	ev.End(mkMainThread, captureAllocEndNS)
+	ev.FrameBoundary(2, captureAllocEndNS)
+	// 故意用小块喂入，覆盖调用栈记录跨分块重组。
+	data := ev.Bytes()
+	for seq, off := int32(0), 0; off < len(data); seq, off = seq+1, off+64 {
+		end := off + 64
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := d.Feed(EncodeChunk(seq, captureMainThreadID, data[off:end])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := d.Stats(); st.Desynced || st.LastError != "" {
+		t.Fatalf("真机字节不应失步: %+v", st)
+	}
+	if snap == nil {
+		t.Fatal("未解出帧")
+	}
+	alloc := findSample(snap.Hierarchy, "UnsafeUtility.Malloc")
+	if alloc == nil {
+		t.Fatalf("缺少分配采样: %+v", snap.Hierarchy)
+	}
+	if len(alloc.Callstack) != 25 {
+		t.Fatalf("调用栈应为 25 层，实际 %d: %v", len(alloc.Callstack), alloc.Callstack)
+	}
+	// 第 9 帧地址 0x71f7b57548 落在方法表里 UIPanel.FillDrawCall 的方法体内。
+	if got := alloc.Callstack[8]; got != "Assembly-CSharp-firstpass.dll!::UIPanel.FillDrawCall()" {
+		t.Fatalf("托管帧未还原成方法名: %q", got)
+	}
+	// 方法表覆盖不到的引擎原生帧保留地址。
+	if got := alloc.Callstack[0]; got != "0x727ff3a8c4" {
+		t.Fatalf("原生帧应保留地址: %q", got)
+	}
+}
+
+// 帧回调期间不得持有会话锁：调用方会在自己的锁里回查会话状态，持锁回调必然死锁。
+func TestFrameCallbackDoesNotHoldSessionLock(t *testing.T) {
+	p := NewPlayer()
+	port, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	sess := NewSession()
+	reentered := make(chan struct{}, 1)
+	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, _ []protocol.SampleNode) {
+		// 回调里回查会话：若解码时仍持着会话锁，这里会永久阻塞。
+		_ = sess.DecodeStats()
+		_ = sess.Connected()
+		select {
+		case reentered <- struct{}{}:
+		default:
+		}
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reentered:
+		sess.Close()
+	case <-time.After(3 * time.Second):
+		// 不能 Close：读取循环已卡死，等它退出会一起挂住。
+		t.Fatal("帧回调被会话锁挡住了")
+	}
+}
+
+// 主线程流失步后再也解不出帧，必须变成致命错误而不是"已连接却停在同一帧"。
+func TestCheckDesyncIsFatalForMainThread(t *testing.T) {
+	d := NewDecoder(nil)
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkDesync(d); err != nil {
+		t.Fatalf("正常流不应报错: %v", err)
+	}
+	// 0x7f 不是任何已知记录类型：字节流无法重新对齐。
+	_ = d.Feed(EncodeChunk(0, captureMainThreadID, []byte{0x7f, 0, 0, 0}))
+	err := checkDesync(d)
+	if err == nil {
+		t.Fatal("主线程流失步应报错")
+	}
+	if !strings.Contains(err.Error(), "0x7f") {
+		t.Fatalf("错误信息应带上原因: %v", err)
+	}
+	// 非主线程流失步只丢那一条流，不影响逐帧指标。
+	d2 := NewDecoder(nil)
+	if err := d2.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	_ = d2.Feed(EncodeChunk(0, captureMainThreadID+1, []byte{0x7f, 0, 0, 0}))
+	if err := checkDesync(d2); err != nil {
+		t.Fatalf("其他线程失步不应中断采集: %v", err)
+	}
+}
+
+func TestMethodTableResolve(t *testing.T) {
+	var tb methodTable
+	tb.add(0x1000, "A")
+	tb.add(0x2000, "B")
+	tb.add(0x2000, "B2") // 同地址重复下发，后者生效
+	cases := []struct {
+		addr uint64
+		want string
+		ok   bool
+	}{
+		{0x1000, "A", true},
+		{0x1040, "A", true},
+		{0x2004, "B2", true},
+		{0x0fff, "", false},                     // 首条符号之前
+		{0x2000 + maxMethodSpan + 1, "", false}, // 超出方法体上限的原生地址
+	}
+	for _, c := range cases {
+		got, ok := tb.resolve(c.addr)
+		if got != c.want || ok != c.ok {
+			t.Fatalf("resolve(%#x)=%q,%v，期望 %q,%v", c.addr, got, ok, c.want, c.ok)
+		}
+	}
+	if tb.unique != 2 {
+		t.Fatalf("去重后应为 2 条，实际 %d", tb.unique)
 	}
 }
 
@@ -646,6 +831,92 @@ func findSample(nodes []protocol.SampleNode, name string) *protocol.SampleNode {
 		}
 	}
 	return nil
+}
+
+// 用户的实际操作：只勾 Call Stacks，不开 Deep Profile。托管分配 GC.Alloc 必须带上
+// 调用栈——历史实现把 Call Stacks 映射到原生分配那一位，界面上一条调用栈都看不到。
+func TestCallStacksAloneCarriesManagedAllocStacks(t *testing.T) {
+	p := NewPlayer()
+	p.Interval = 5 * time.Millisecond
+	port, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	var mu sync.Mutex
+	var last []protocol.SampleNode
+	sess := NewSession()
+	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+		mu.Lock()
+		last = h
+		mu.Unlock()
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.SetProfilerOptions(false, true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		h := last
+		mu.Unlock()
+		if alloc := findSample(h, "GC.Alloc"); alloc != nil && len(alloc.Callstack) > 0 {
+			if got := p.csFlags.Load(); got&CallstackFlagManagedAlloc == 0 {
+				t.Fatalf("下发的掩码 %#x 缺少托管分配位", got)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("只勾 Call Stacks 时 GC.Alloc 没有调用栈")
+}
+
+// 关掉 Call Stacks 后不应再下发任何调用栈位，但 GC.Alloc 采样本身仍在（真机如此）。
+func TestCallStacksOffKeepsAllocSampleWithoutStack(t *testing.T) {
+	p := NewPlayer()
+	p.Interval = 5 * time.Millisecond
+	port, err := p.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+
+	var mu sync.Mutex
+	var last []protocol.SampleNode
+	sess := NewSession()
+	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+		mu.Lock()
+		last = h
+		mu.Unlock()
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	if err := sess.SetProfilerOptions(false, false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		h := last
+		mu.Unlock()
+		if alloc := findSample(h, "GC.Alloc"); alloc != nil && alloc.GCAllocKB > 0 {
+			if len(alloc.Callstack) > 0 {
+				t.Fatalf("未勾 Call Stacks 却有调用栈: %v", alloc.Callstack)
+			}
+			if got := p.csFlags.Load(); got != 0 {
+				t.Fatalf("下发的掩码应为 0，实际 %#x", got)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("未收到带分配量的 GC.Alloc 采样")
 }
 
 func TestSessionDeepProfileAndCallStacks(t *testing.T) {

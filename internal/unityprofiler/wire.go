@@ -191,31 +191,35 @@ func AnnouncementFromBody(body []byte) string {
 	return strings.TrimSpace(s[i:])
 }
 
-// MsgIDProfilerSetup 报文体的标志位（连接时为 0）。
+// MsgIDProfilerSetup 报文体（连接时为 0）是一张"哪些分配要附带调用栈"的位掩码。
+//
+// 各位互相独立、可叠加，真机逐位实测（Unity 2022 手机包，其余位无任何效果）：
+// 把它当成"bit0=Deep Profile、bit1=Call Stacks"是错的——那样勾 Call Stacks 只会
+// 打开原生分配的栈，用户要看的 GC.Alloc 反而一条都没有。
 const (
-	SetupFlagDeepProfiling = uint32(1 << 0)
-	SetupFlagCallStacks    = uint32(1 << 1)
+	// CallstackFlagManagedAlloc 采集托管分配（GC.Alloc）的调用栈，对应 Editor
+	// CPU Profiler 工具栏的 Call Stacks 勾选，也是用户真正要看的那一类。
+	CallstackFlagManagedAlloc = uint32(1 << 0)
+	// CallstackFlagNativeAlloc 采集引擎原生分配（UnsafeUtility.Malloc 等）的调用栈。
+	CallstackFlagNativeAlloc = uint32(1 << 1)
+	// CallstackFlagNativeAllocator 采集原生分配器（Native.Alloc/Dealloc/Realloc）的
+	// 调用栈。实测帧率直接减半，因此不随 Call Stacks 一起下发。
+	CallstackFlagNativeAllocator = uint32(1 << 3)
 )
 
-// EncodeSetupFlags 生成 MsgIDProfilerSetup 报文体。
-func EncodeSetupFlags(deep, callStacks bool) []byte {
-	var flags uint32
-	if deep {
-		flags |= SetupFlagDeepProfiling
-	}
-	if callStacks {
-		flags |= SetupFlagCallStacks
-	}
-	return EncodeAreaMask(flags)
-}
+// CallstackFlagsDefault 是勾选 Call Stacks 时下发的掩码：托管分配是主要目标，
+// 引擎原生分配额外开销很小，一并打开可覆盖 UnsafeUtility.Malloc 这类采样。
+const CallstackFlagsDefault = CallstackFlagManagedAlloc | CallstackFlagNativeAlloc
 
-// ParseSetupFlags 解析 MsgIDProfilerSetup 报文体。
-func ParseSetupFlags(body []byte) (deep, callStacks bool) {
+// EncodeCallstackFlags 生成 MsgIDProfilerSetup 报文体。
+func EncodeCallstackFlags(flags uint32) []byte { return EncodeAreaMask(flags) }
+
+// ParseCallstackFlags 解析 MsgIDProfilerSetup 报文体。
+func ParseCallstackFlags(body []byte) uint32 {
 	if len(body) < 4 {
-		return false, false
+		return 0
 	}
-	flags := binary.LittleEndian.Uint32(body)
-	return flags&SetupFlagDeepProfiling != 0, flags&SetupFlagCallStacks != 0
+	return binary.LittleEndian.Uint32(body)
 }
 
 // EncodeAreaMask 生成 MsgIDProfilerAreas 报文体。

@@ -59,6 +59,9 @@ type Status struct {
 	// DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 能力位。
 	DeepProfilerSupported      bool `json:"deepProfilerSupported"`
 	ManagedCallstacksSupported bool `json:"managedCallstacksSupported"`
+	// LastError 是最近一次采集异常中断的原因；正常断开或未出错时为空。
+	// 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
+	LastError string `json:"lastError"`
 }
 
 // PerfService 是性能采集与分析的门面，供前端调用。
@@ -78,6 +81,7 @@ type PerfService struct {
 	loadedHS   protocol.Handshake
 	deep       bool
 	callStacks bool
+	lastErr    string
 
 	// tickReq 是"界面需要刷新"的合并信号，容量 1 且非阻塞投递。
 	tickReq chan struct{}
@@ -252,6 +256,7 @@ func (p *PerfService) connectTCP(host string, port int, transport string) (proto
 	p.recording = true
 	p.sourceFile = ""
 	p.loadedHS = protocol.Handshake{}
+	p.lastErr = ""
 	p.mu.Unlock()
 
 	hs, err := p.client.Connect(host, port, p.onFrame, p.onClosed)
@@ -309,6 +314,7 @@ func (p *PerfService) Status() Status {
 	loadedHS := p.loadedHS
 	deep := p.deep
 	callStacks := p.callStacks
+	lastErr := p.lastErr
 	p.mu.Unlock()
 	hs, _ := p.client.Handshake()
 	if hs == (protocol.Handshake{}) {
@@ -329,6 +335,7 @@ func (p *PerfService) Status() Status {
 		CallStacks:                 callStacks,
 		DeepProfilerSupported:      hs.DeepProfilerSupported,
 		ManagedCallstacksSupported: hs.ManagedCallstacksSupported,
+		LastError:                  lastErr,
 	}
 }
 
@@ -506,6 +513,12 @@ func (p *PerfService) onFrame(f protocol.FrameData, hierarchy []protocol.SampleN
 }
 
 func (p *PerfService) onClosed(err error) {
+	p.mu.Lock()
+	p.lastErr = ""
+	if err != nil {
+		p.lastErr = err.Error()
+	}
+	p.mu.Unlock()
 	if err != nil {
 		p.logf("采集连接关闭: %v", err)
 	} else {

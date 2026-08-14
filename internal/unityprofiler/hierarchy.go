@@ -1,9 +1,9 @@
 package unityprofiler
 
 import (
+	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf16"
 
 	"unityperfagent/internal/protocol"
 )
@@ -29,8 +29,24 @@ func cloneValues(in []value) []value {
 func buildHierarchy(d *Decoder, roots []*treeNode) []protocol.SampleNode {
 	nodes := treeToSamples(d, roots)
 	nodes = mergeSampleNodes(nodes)
+	// 先把分配量上浮，再裁剪：这样即使子树因预算被砍掉，父行仍显示完整分配量，
+	// 不会出现"父行 0 KB、展开后才冒出分配"的假象。
+	rollUpGCAlloc(nodes)
 	budget := maxHierarchyNodes
 	return capSampleNodes(nodes, &budget)
+}
+
+// rollUpGCAlloc 把分配量累加到各级祖先，对齐 Unity Profiler 的 GC Alloc 列语义
+// （该列是"含子树"的总量）。分配采样藏在 5~7 层深处，父行若只算自己就全是 0，
+// 用户从根往下看每行都是空的，根本无从知道该展开哪条分支。
+func rollUpGCAlloc(nodes []protocol.SampleNode) float32 {
+	var sum float32
+	for i := range nodes {
+		n := &nodes[i]
+		n.GCAllocKB += rollUpGCAlloc(n.Children)
+		sum += n.GCAllocKB
+	}
+	return sum
 }
 
 func treeToSamples(d *Decoder, nodes []*treeNode) []protocol.SampleNode {
@@ -54,53 +70,35 @@ func treeToSamples(d *Decoder, nodes []*treeNode) []protocol.SampleNode {
 		}
 		for _, v := range n.meta {
 			switch v.Type {
-			case DataTypeString:
-				s.Callstack = mergeCallstack(s.Callstack, splitCallstack(string(v.Raw)))
-			case DataTypeString16:
-				s.Callstack = mergeCallstack(s.Callstack, splitCallstack(utf16BytesToString(v.Raw)))
+			case DataTypeString, DataTypeString16:
+				// 字符串元数据是采样自带的说明文本（如 UI 元素名），不是调用栈。
 			default:
 				if num, ok := v.Number(); ok && strings.EqualFold(name, "GC.Alloc") {
 					s.GCAllocKB = float32(num / bytesPerKB)
 				}
 			}
 		}
+		s.Callstack = resolveCallstack(d, n.callstack)
 		out = append(out, s)
 	}
 	return out
 }
 
-func splitCallstack(s string) []string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	parts := strings.Split(s, "\n")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
+// resolveCallstack 把 Player 上报的代码地址翻译成可读栈帧：托管方法查方法表，
+// 原生帧（引擎自身代码，方法表不覆盖）保留十六进制地址。
+func resolveCallstack(d *Decoder, addrs []uint64) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if name, ok := d.meta.methods.resolve(a); ok {
+			out = append(out, name)
+			continue
 		}
+		out = append(out, fmt.Sprintf("%#x", a))
 	}
 	return out
-}
-
-func mergeCallstack(dst, src []string) []string {
-	if len(src) == 0 {
-		return dst
-	}
-	if len(dst) == 0 {
-		return src
-	}
-	return append(dst, src...)
-}
-
-func utf16BytesToString(b []byte) string {
-	if len(b) < 2 {
-		return string(b)
-	}
-	u := make([]uint16, 0, len(b)/2)
-	for i := 0; i+1 < len(b); i += 2 {
-		u = append(u, uint16(b[i])|uint16(b[i+1])<<8)
-	}
-	return string(utf16.Decode(u))
 }
 
 func mergeSampleNodes(nodes []protocol.SampleNode) []protocol.SampleNode {

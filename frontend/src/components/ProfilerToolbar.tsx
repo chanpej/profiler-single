@@ -64,7 +64,7 @@ export function ProfilerToolbar({
       <label
         className={`profiler-check ${connected ? '' : 'is-disabled'}`}
         title={connected
-          ? '采集全部脚本方法调用（需 Development Build 且开启 Deep Profiling Support）'
+          ? '采集全部脚本方法调用。注意：该开关对应的报文尚未逆向出来，目前只记录状态、不会下发到设备'
           : '连接 Player 后可开启 Deep Profile'}
       >
         <input
@@ -79,7 +79,7 @@ export function ProfilerToolbar({
       <label
         className={`profiler-check ${connected ? '' : 'is-disabled'}`}
         title={connected
-          ? '记录 GC.Alloc 等采样的托管调用栈'
+          ? '记录分配采样的调用栈（托管 GC.Alloc 与引擎原生分配），只对开启之后采集的帧生效'
           : '连接 Player 后可开启 Call Stacks'}
       >
         <input

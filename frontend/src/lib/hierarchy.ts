@@ -43,11 +43,48 @@ export function defaultExpanded(nodes: SampleNode[], maxDepth = 2): Set<string> 
 }
 
 /**
+ * 通往调用栈采样的所有祖先路径。分配采样藏在 5~7 层深处，默认展开层数够不到，
+ * 用户勾了 Call Stacks 也只会看到一棵没有调用栈的浅树。
+ */
+export function callstackPaths(nodes: SampleNode[], prefix = ''): Set<string> {
+  const set = new Set<string>();
+  const walk = (list: SampleNode[], pre: string): boolean => {
+    let found = false;
+    list.forEach((n) => {
+      const path = samplePath(pre, n.name);
+      const kids = n.children ?? [];
+      const inKids = kids.length > 0 && walk(kids, path);
+      if (inKids) set.add(path);
+      if (inKids || (n.callstack?.length ?? 0) > 0) found = true;
+    });
+    return found;
+  };
+  walk(nodes, prefix);
+  return set;
+}
+
+export interface ExpandOptions {
+  maxDepth?: number;
+  /** 额外展开通往调用栈的分支（勾选 Call Stacks 时用）。 */
+  revealCallstacks?: boolean;
+}
+
+/**
  * 合并默认展开与用户操作：用户收起过的路径不会被数据刷新重新展开。
  */
-export function mergeExpanded(current: Set<string>, nodes: SampleNode[], touched: Set<string>, maxDepth = 2): Set<string> {
+export function mergeExpanded(
+  current: Set<string>,
+  nodes: SampleNode[],
+  touched: Set<string>,
+  opts: ExpandOptions = {},
+): Set<string> {
+  const { maxDepth = 2, revealCallstacks = false } = opts;
   const next = new Set(current);
-  for (const p of defaultExpanded(nodes, maxDepth)) {
+  const auto = defaultExpanded(nodes, maxDepth);
+  if (revealCallstacks) {
+    for (const p of callstackPaths(nodes)) auto.add(p);
+  }
+  for (const p of auto) {
     if (!touched.has(p)) next.add(p);
   }
   return next;

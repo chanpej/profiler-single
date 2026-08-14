@@ -127,6 +127,8 @@ export interface Status {
   callStacks?: boolean;
   deepProfilerSupported?: boolean;
   managedCallstacksSupported?: boolean;
+  /** 最近一次采集异常中断的原因；正常断开时为空。 */
+  lastError?: string;
 }
 
 export interface LLMConfig {

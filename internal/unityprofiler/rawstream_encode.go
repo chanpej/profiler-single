@@ -146,11 +146,35 @@ func (w *RecordWriter) End(markerID uint32, ts int64) {
 	w.i64(ts)
 }
 
-// StringMeta 在当前采样上追加一条字符串元数据（Call Stacks 的调用栈文本）。
+// StringMeta 在当前采样上追加一条字符串元数据（如 UI 元素名）。
 func (w *RecordWriter) StringMeta(s string) {
 	w.u8(1)
 	w.u8(DataTypeString)
 	w.str(s)
+}
+
+// MethodDef 写出一条托管方法符号（元数据流）：开启 Call Stacks 后 Player 用它下发方法表。
+// IL2CPP 包不带源码位置，file 传空、line 传 0。
+func (w *RecordWriter) MethodDef(addr uint64, name, file string, line uint32) {
+	w.u8(recMetaMethod)
+	w.u8(0)
+	w.i64(0) // 实测恒为 0
+	w.i64(int64(addr))
+	w.u32(0) // 实测恒为 0
+	w.str(name)
+	w.str(file)
+	w.u32(line)
+}
+
+// Callstack 写出当前采样的调用栈（事件流）：地址为返回地址，落在方法体内部。
+func (w *RecordWriter) Callstack(addrs ...uint64) {
+	w.u8(recCallstack)
+	w.u8(0)
+	w.u32(0) // 实测恒为 0
+	w.u8(byte(len(addrs)))
+	for _, a := range addrs {
+		w.i64(int64(a))
+	}
 }
 
 // Int64Meta 在当前采样上追加一条 Int64 元数据（如 GC.Alloc 字节数）。

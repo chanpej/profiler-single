@@ -90,6 +90,10 @@ export interface SampleNode {
     "totalMs": number;
     "selfMs": number;
     "calls": number;
+
+    /**
+     * GCAllocKB 含子树分配量（与 Unity Profiler 的 GC Alloc 列一致），不是仅自身。
+     */
     "gcAllocKB": number;
     "callstack"?: string[] | null;
     "children"?: SampleNode[] | null;

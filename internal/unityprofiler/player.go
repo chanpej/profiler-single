@@ -36,8 +36,8 @@ type Player struct {
 	ln     net.Listener
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	deep   atomic.Bool
-	stacks atomic.Bool
+	// csFlags 是 Editor 下发的分配调用栈掩码（MsgIDProfilerSetup 报文体）。
+	csFlags atomic.Uint32
 }
 
 // 假 Player 使用的分类、marker 与计数器编号。
@@ -71,6 +71,15 @@ const (
 	mkPlayerUpd  uint32 = 118
 	mkGameTick   uint32 = 119
 	mkEnemyUpd   uint32 = 120
+	mkCallstack  uint32 = 121
+	// mkUnsafeMalloc 是原生分配采样，真机上它的调用栈由另一位单独开启。
+	mkUnsafeMalloc uint32 = 122
+
+	// 假方法表：地址取真机同量级（IL2CPP 生成代码），并留出方法体空间。
+	fakeMethodPlayerUpd uint64 = 0x71f7b55c08
+	fakeMethodGameTick  uint64 = 0x71f7b56190
+	// fakeNativeAddr 落在方法表覆盖范围之外，模拟无法解析的引擎原生帧。
+	fakeNativeAddr uint64 = 0x727ff3a8c4
 
 	ctrIDCPUTotal   uint32 = 200
 	ctrIDCPUMain    uint32 = 201
@@ -244,7 +253,7 @@ func (p *Player) serve(ctx context.Context, conn net.Conn) {
 		case <-ticker.C:
 			events.Reset()
 			renderEvents.Reset()
-			gen.writeFrame(&events, &renderEvents, p.deep.Load(), p.stacks.Load())
+			gen.writeFrame(&events, &renderEvents, p.csFlags.Load())
 			// 主线程块先发以打开当前帧，渲染统计随后并入这一帧。
 			if err := p.sendStream(conn, fakeMainThreadID, &mainSeq, events.Bytes()); err != nil {
 				return
@@ -299,6 +308,12 @@ func (p *Player) writeMetadata(w *RecordWriter) {
 	w.MarkerDef(mkPlayerUpd, 0, catScripts, "PlayerController.Update")
 	w.MarkerDef(mkGameTick, 0, catScripts, "GameManager.Tick")
 	w.MarkerDef(mkEnemyUpd, 0, catScripts, "Enemy.Update")
+	w.MarkerDef(mkCallstack, 0, catInternal, "Profiler.Callstack")
+	w.MarkerDef(mkUnsafeMalloc, 0, catInternal, "UnsafeUtility.Malloc")
+
+	// 开启 Call Stacks 后真机会全量下发方法表；这里给出调用栈用到的两条。
+	w.MethodDef(fakeMethodPlayerUpd, "Assembly-CSharp.dll!::PlayerController.Update()", "", 0)
+	w.MethodDef(fakeMethodGameTick, "Assembly-CSharp.dll!::GameManager.Tick()", "", 0)
 
 	w.CounterDef(ctrIDCPUTotal, catRender, "CPU Total Frame Time", DataTypeDouble, UnitTimeNanoseconds)
 	w.CounterDef(ctrIDCPUMain, catRender, "CPU Main Thread Frame Time", DataTypeDouble, UnitTimeNanoseconds)
@@ -391,7 +406,7 @@ func (g *frameGenerator) shape() FrameShape {
 
 // writeFrame 写出一帧完整事件序列：主线程流写采样与内存计数器，渲染线程流写渲染统计
 // （与真机一致，渲染统计不在主线程流上）。
-func (g *frameGenerator) writeFrame(w, render *RecordWriter, deep, stacks bool) FrameShape {
+func (g *frameGenerator) writeFrame(w, render *RecordWriter, csFlags uint32) FrameShape {
 	g.index++
 	s := g.shape()
 	ms := func(v float64) int64 { return int64(v * 1e6) }
@@ -409,8 +424,8 @@ func (g *frameGenerator) writeFrame(w, render *RecordWriter, deep, stacks bool) 
 		{mkAnimation, s.AnimMs}, {mkGC, s.GCMs}, {mkVSync, s.VSyncMs}, {mkUI, s.UIMs},
 	} {
 		w.Begin(seg.id, at)
-		if seg.id == mkScripts && (deep || stacks) {
-			writeDeepScripts(w, at, ms(seg.ms), deep, stacks, s.GCAllocKB)
+		if seg.id == mkScripts {
+			writeScriptSamples(w, at, ms(seg.ms), csFlags, s.GCAllocKB)
 		}
 		at += ms(seg.ms)
 		w.End(seg.id, at)
@@ -459,22 +474,38 @@ func (g *frameGenerator) writeFrame(w, render *RecordWriter, deep, stacks bool) 
 	return s
 }
 
-func writeDeepScripts(w *RecordWriter, start, durNS int64, deep, stacks bool, gcAllocKB float64) {
-	if deep {
-		mid := start + durNS/2
-		w.Begin(mkPlayerUpd, start)
-		w.Begin(mkGameTick, start)
-		w.End(mkGameTick, mid)
-		w.End(mkPlayerUpd, mid)
-		w.Begin(mkEnemyUpd, mid)
-		w.End(mkEnemyUpd, start+durNS)
+// writeScriptSamples 写脚本方法与分配采样。
+//
+// 与真机对齐的两点：脚本方法采样和 GC.Alloc 在任何档位下都存在（实测各档树规模一致），
+// 只有调用栈受掩码控制；托管与原生分配各由一位单独开启。
+func writeScriptSamples(w *RecordWriter, start, durNS int64, csFlags uint32, gcAllocKB float64) {
+	mid := start + durNS/2
+	w.Begin(mkPlayerUpd, start)
+	w.Begin(mkGameTick, start)
+	w.End(mkGameTick, mid)
+	w.End(mkPlayerUpd, mid)
+	w.Begin(mkEnemyUpd, mid)
+	w.End(mkEnemyUpd, start+durNS)
+
+	allocAt := start + durNS/4
+	w.Begin(mkGCAlloc, allocAt)
+	w.Int64Meta(int64(gcAllocKB * bytesPerKB))
+	if csFlags&CallstackFlagManagedAlloc != 0 {
+		// 与真机一致：先记一笔采集开销采样并关掉，再写调用栈，此时栈顶正是分配采样。
+		w.Begin(mkCallstack, allocAt)
+		w.End(mkCallstack, allocAt+200)
+		w.Callstack(fakeMethodPlayerUpd+0x24, fakeMethodGameTick+0x8, fakeNativeAddr)
 	}
-	if stacks {
-		allocAt := start + durNS/4
-		w.Begin(mkGCAlloc, allocAt)
-		w.Int64Meta(int64(gcAllocKB * bytesPerKB))
-		w.StringMeta("GC.Alloc\nPlayerController.Update ()\nGameManager.Tick ()\nUnityEngine.MonoBehaviour:Update ()")
-		w.End(mkGCAlloc, allocAt+1000)
+	w.End(mkGCAlloc, allocAt+1000)
+
+	if csFlags&CallstackFlagNativeAlloc != 0 {
+		nativeAt := allocAt + 2000
+		w.Begin(mkUnsafeMalloc, nativeAt)
+		w.Int64Meta(int64(gcAllocKB * bytesPerKB / 2))
+		w.Begin(mkCallstack, nativeAt)
+		w.End(mkCallstack, nativeAt+200)
+		w.Callstack(fakeMethodGameTick+0x10, fakeNativeAddr)
+		w.End(mkUnsafeMalloc, nativeAt+1000)
 	}
 }
 
@@ -496,9 +527,7 @@ func (p *Player) readCommands(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if msg.ID == MsgIDProfilerSetup {
-			deep, stacks := ParseSetupFlags(msg.Body)
-			p.deep.Store(deep)
-			p.stacks.Store(stacks)
+			p.csFlags.Store(ParseCallstackFlags(msg.Body))
 		}
 	}
 }

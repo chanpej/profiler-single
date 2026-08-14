@@ -128,6 +128,9 @@ const (
 	recMetaThread   = 0x21
 	recMetaCategory = 0x3E
 	recMetaCatFlag  = 0x3F
+	// recMetaMethod 是托管方法符号：开启 Call Stacks 后 Player 会一次性把方法表全量下发，
+	// 用于把调用栈里的代码地址还原成方法名。
+	recMetaMethod = 0x08
 
 	// 线程事件流
 	recFrame        = 0x22
@@ -139,6 +142,8 @@ const (
 	recInstanceHint = 0x39
 	recLegacyStats  = 0x04
 	recAudioStats   = 0x05
+	// recCallstack 是当前采样的调用栈（地址数组），开启 Call Stacks 后才出现。
+	recCallstack = 0x03
 
 	// legacyStatsSize 是 Profiler.CollectLegacyStats 内定长统计结构（含 pad）的大小。
 	legacyStatsSize = 1273
@@ -252,11 +257,84 @@ type markerInfo struct {
 // IsCounter 判断该 marker 是否为 ProfilerCounter。
 func (m markerInfo) IsCounter() bool { return m.Flags&markerFlagCounter != 0 }
 
+// methodSymbol 是一条托管方法符号。Addr 是方法入口地址，调用栈里的地址落在
+// 方法体内部（返回地址），因此解析时取不超过 maxMethodSpan 的最近下界。
+type methodSymbol struct {
+	Addr uint64
+	Name string
+}
+
+const (
+	// maxMethodSpan 是方法体大小上限：地址与入口的距离超过它就认为不属于该方法
+	// （Player 不上报方法体长度，末尾符号之后的原生地址必须落空而不是错认）。
+	maxMethodSpan = 1 << 16
+	// maxMethodSymbols 限制方法表条数。实测 Unity 2022 手机包约 33 万条；
+	// 反复开关 Call Stacks 会重复下发，去重后仍超上限就丢弃，避免内存无界。
+	maxMethodSymbols = 500_000
+)
+
+// methodTable 是地址 → 方法名的查询表，按需排序去重。
+type methodTable struct {
+	syms   []methodSymbol
+	sorted bool
+	// unique 是上次去重后的条数，用于判断是否该提前去重。
+	unique  int
+	dropped int
+}
+
+// add 追加一条方法符号；同一地址重复下发时后者生效。
+func (t *methodTable) add(addr uint64, name string) {
+	if addr == 0 || name == "" {
+		return
+	}
+	if len(t.syms) >= maxMethodSymbols {
+		t.dropped++
+		return
+	}
+	t.syms = append(t.syms, methodSymbol{Addr: addr, Name: name})
+	t.sorted = false
+	// 反复开关会把整张表再发一遍，这里及时去重以免堆积。
+	if len(t.syms) > 2*t.unique+1024 {
+		t.compact()
+	}
+}
+
+func (t *methodTable) compact() {
+	sort.SliceStable(t.syms, func(i, j int) bool { return t.syms[i].Addr < t.syms[j].Addr })
+	out := t.syms[:0]
+	for i, s := range t.syms {
+		// 同地址只留最后一条（最近一次下发）。
+		if i+1 < len(t.syms) && t.syms[i+1].Addr == s.Addr {
+			continue
+		}
+		out = append(out, s)
+	}
+	t.syms = out
+	t.unique = len(out)
+	t.sorted = true
+}
+
+// resolve 把调用栈地址还原为方法名；表内没有覆盖该地址的方法时返回 false。
+func (t *methodTable) resolve(addr uint64) (string, bool) {
+	if !t.sorted {
+		t.compact()
+	}
+	if len(t.syms) == 0 {
+		return "", false
+	}
+	i := sort.Search(len(t.syms), func(k int) bool { return t.syms[k].Addr > addr }) - 1
+	if i < 0 || addr-t.syms[i].Addr > maxMethodSpan {
+		return "", false
+	}
+	return t.syms[i].Name, true
+}
+
 // metaTables 保存元数据流建立的查询表。
 type metaTables struct {
 	markers    map[uint32]markerInfo
 	categories map[uint16]string
 	threads    map[int64]string
+	methods    methodTable
 }
 
 func newMetaTables() *metaTables {
@@ -303,15 +381,18 @@ type sampleEntry struct {
 	childNS  int64
 	kids     []*treeNode
 	meta     []value
+	// callstack 是 Call Stacks 开启后 Player 上报的代码地址，尚未解析为方法名。
+	callstack []uint64
 }
 
 // treeNode 是一帧主线程采样树中的一个节点（尚未合并同名兄弟）。
 type treeNode struct {
-	markerID uint32
-	totalNS  int64
-	selfNS   int64
-	kids     []*treeNode
-	meta     []value
+	markerID  uint32
+	totalNS   int64
+	selfNS    int64
+	kids      []*treeNode
+	meta      []value
+	callstack []uint64
 }
 
 // DecodeStats 是解码过程的可观测指标，便于自检与排障。
@@ -551,6 +632,15 @@ func (d *Decoder) decodeMetaRecord(_ *threadStream, c *cursor) error {
 	case recMetaCatFlag:
 		c.u8()
 		c.skip(4)
+	case recMetaMethod:
+		c.u8()
+		c.skip(8) // 实测恒为 0
+		addr := uint64(c.i64())
+		c.u32() // 实测恒为 0
+		name := c.str()
+		c.str() // 源文件名，IL2CPP 包为空
+		c.u32() // 源文件行号，IL2CPP 包为 0
+		d.meta.methods.add(addr, name)
 	default:
 		return fmt.Errorf("unityprofiler: 元数据流未知记录类型 0x%02x", t)
 	}
@@ -600,28 +690,43 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 	case recInstanceHint:
 		c.u16()
 		c.u32()
+	case recCallstack:
+		// 与元数据取值列表撞号：调用栈记录第二个字节固定为 0，而取值类型不会是 0（None）。
+		if !c.hasMore() || c.peek() != 0x00 {
+			attachMeta(st, c.values(int(t)))
+			break
+		}
+		c.u8()
+		c.u32() // 实测恒为 0
+		depth := int(c.u8())
+		addrs := make([]uint64, 0, depth)
+		for i := 0; i < depth; i++ {
+			addrs = append(addrs, uint64(c.i64()))
+		}
+		// 调用栈属于当前打开的采样：Player 会先关掉 Profiler.Callstack 这个采集开销采样，
+		// 再写出调用栈，此时栈顶正是发生分配的那个采样（GC.Alloc / UnsafeUtility.Malloc）。
+		if len(st.stack) > 0 {
+			top := &st.stack[len(st.stack)-1]
+			top.callstack = append(top.callstack, addrs...)
+		}
 	case recLegacyStats:
 		// 与元数据取值列表撞号：Profiler.CollectLegacyStats 里的定长统计结构以 0x00 开头。
 		if !c.hasMore() || c.peek() != 0x00 {
-			c.values(int(t))
+			attachMeta(st, c.values(int(t)))
 			break
 		}
 		c.skip(legacyStatsSize)
 	case recAudioStats:
 		if !c.hasMore() || c.peek() != 0x00 {
-			c.values(int(t))
+			attachMeta(st, c.values(int(t)))
 			break
 		}
 		c.skip(audioStatsHeadSize)
 		c.str()
 	default:
 		if t >= 0x01 && t <= 0x0F {
-			// 记录类型即随后的元数据取值个数（Begin 之后的 Call Stack / GC.Alloc 大小）。
-			vals := c.values(int(t))
-			if len(st.stack) > 0 {
-				top := &st.stack[len(st.stack)-1]
-				top.meta = append(top.meta, cloneValues(vals)...)
-			}
+			// 记录类型即随后的元数据取值个数（Begin 之后的 GC.Alloc 大小、对象名等）。
+			attachMeta(st, c.values(int(t)))
 			break
 		}
 		key := fmt.Sprintf("0x%02x", t)
@@ -630,6 +735,15 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 	}
 	d.stats.EventRecords++
 	return nil
+}
+
+// attachMeta 把元数据取值挂到当前打开的采样上。
+func attachMeta(st *threadStream, vals []value) {
+	if len(vals) == 0 || len(st.stack) == 0 {
+		return
+	}
+	top := &st.stack[len(st.stack)-1]
+	top.meta = append(top.meta, cloneValues(vals)...)
 }
 
 func (d *Decoder) closeSample(st *threadStream, endNS int64) {
@@ -649,7 +763,8 @@ func (d *Decoder) closeSample(st *threadStream, endNS int64) {
 	if self < 0 {
 		self = 0
 	}
-	node := &treeNode{markerID: top.markerID, totalNS: dur, selfNS: self, kids: top.kids, meta: top.meta}
+	node := &treeNode{markerID: top.markerID, totalNS: dur, selfNS: self,
+		kids: top.kids, meta: top.meta, callstack: top.callstack}
 	if len(st.stack) > 0 {
 		parent := &st.stack[len(st.stack)-1]
 		parent.kids = append(parent.kids, node)
