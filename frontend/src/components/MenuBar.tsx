@@ -10,12 +10,14 @@ interface Props {
   onFrames: () => void;
   onAnalysis: () => void;
   onSettings: () => void;
+  onToggleAgent?: () => void;
+  agentCollapsed?: boolean;
 }
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
   canSave = true,
-  onImport, onExport, onClear, onFrames, onAnalysis, onSettings,
+  onImport, onExport, onClear, onFrames, onAnalysis, onSettings, onToggleAgent, agentCollapsed = false,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -91,6 +93,9 @@ export function MenuBar({
           <div className="menubar-dropdown" role="menu">
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onFrames)}>
               帧数据
+            </button>
+            <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(() => onToggleAgent?.())}>
+              {agentCollapsed ? '展开 Agent 面板' : '收起 Agent 面板'}
             </button>
           </div>
         )}

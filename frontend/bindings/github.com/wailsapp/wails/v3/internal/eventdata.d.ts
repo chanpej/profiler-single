@@ -12,6 +12,7 @@ import type * as services$0 from "../../../../../unityperfagent/services/models.
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "agent:chunk": services$0.AgentChunkEvent;
             "perf:tick": services$0.TickEvent;
         }
     }

@@ -2,8 +2,9 @@
 // 绑定层的 Go 切片可能为 null，这里统一归一化为空数组。
 import { Events } from '@wailsio/runtime';
 import * as PerfService from '../bindings/unityperfagent/services/perfservice.js';
-import type { FrameData, Handshake, LLMConfig, Report, SampleNode, Stats, Status, TickEvent } from './types';
+import type { AgentModelOption, FrameData, Handshake, LLMConfig, ProbeResult, Report, SampleNode, Stats, Status, TickEvent } from './types';
 import { normalizeSampleTree } from './lib/sample';
+import { normalizeLLMConfig } from './lib/llmConfig';
 
 export const api = {
   connectUSB: (serial = '', packageId = ''): Promise<Handshake> => PerfService.ConnectUSB(serial, packageId),
@@ -26,12 +27,48 @@ export const api = {
     PerfService.FrameHierarchy(index).then((rows) => normalizeSampleTree(rows)),
   diagnose: (): Promise<string> => PerfService.Diagnose(),
   llmConfig: (): Promise<LLMConfig> =>
-    PerfService.LLMConfig().then((cfg) => ({
+    PerfService.LLMConfig().then((cfg) => normalizeLLMConfig({
+      activeId: cfg.activeId ?? '',
+      agents: (cfg.agents ?? []).map((a) => ({
+        id: a.id ?? '',
+        name: a.name ?? '',
+        command: a.command ?? '',
+        args: a.args ?? [],
+        workDir: a.workDir ?? '',
+        model: a.model ?? '',
+        effort: a.effort ?? '',
+      })),
       agentCommand: cfg.agentCommand ?? '',
       agentArgs: cfg.agentArgs ?? [],
       workDir: cfg.workDir ?? '',
     })),
   setLLMConfig: (cfg: LLMConfig): Promise<void> => PerfService.SetLLMConfig(cfg),
+  listAgentModels: async (cfg: LLMConfig): Promise<AgentModelOption[]> => {
+    try {
+      const rows = await PerfService.ListAgentModels(cfg);
+      return (rows ?? [])
+        .map((m) => ({ id: m.id ?? '', label: (m.name || m.id) ?? '' }))
+        .filter((m) => m.id !== '');
+    } catch {
+      return [];
+    }
+  },
+  probeAgent: async (cfg: LLMConfig): Promise<ProbeResult> => {
+    try {
+      const r = await PerfService.ProbeAgent(cfg);
+      return {
+        ok: r?.ok === true,
+        name: r?.name ?? '',
+        message: (r?.message ?? '').trim() || (r?.ok ? 'ACP 握手成功' : '检测失败（无返回信息）'),
+      };
+    } catch (e) {
+      return { ok: false, name: '', message: String(e) };
+    }
+  },
+  agentChatSend: (message: string): Promise<string> => PerfService.AgentChatSend(message),
+  agentChatClose: (): Promise<void> => PerfService.AgentChatClose(),
   onTick: (handler: (ev: TickEvent) => void): (() => void) =>
     Events.On('perf:tick', (ev: { data: TickEvent }) => handler(ev.data)),
+  onAgentChunk: (handler: (text: string) => void): (() => void) =>
+    Events.On('agent:chunk', (ev: { data: { text: string } }) => handler(ev.data?.text ?? '')),
 };

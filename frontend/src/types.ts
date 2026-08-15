@@ -131,10 +131,28 @@ export interface Status {
   lastError?: string;
 }
 
+export interface AgentProfile {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  workDir: string;
+  model: string;
+  effort: string;
+}
+
 export interface LLMConfig {
+  activeId: string;
+  agents: AgentProfile[];
   agentCommand: string;
   agentArgs: string[];
   workDir: string;
+}
+
+export interface ProbeResult {
+  ok: boolean;
+  name: string;
+  message: string;
 }
 
 export interface TickEvent {
@@ -142,6 +160,11 @@ export interface TickEvent {
   retained: number;
   connected: boolean;
   recording?: boolean;
+}
+
+export interface AgentModelOption {
+  id: string;
+  label: string;
 }
 
 export type OverlayId = 'frames' | 'analysis' | 'settings';

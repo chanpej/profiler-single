@@ -41,6 +41,23 @@ func TestLLMConfigRoundTrip(t *testing.T) {
 	if got.AgentCommand != "gemini" || len(got.AgentArgs) != 1 {
 		t.Fatalf("cfg = %+v", got)
 	}
+	if got.ActiveID != "custom" {
+		t.Fatalf("active = %q", got.ActiveID)
+	}
+	if len(got.Agents) < 3 {
+		t.Fatalf("agents = %+v", got.Agents)
+	}
+}
+
+func TestLLMConfigDefaults(t *testing.T) {
+	svc := newTestService()
+	got := svc.LLMConfig()
+	if got.ActiveID != "codex" || len(got.Agents) != 2 {
+		t.Fatalf("defaults = %+v", got)
+	}
+	if got.AgentCommand != "codex" {
+		t.Fatalf("codex command = %q", got.AgentCommand)
+	}
 }
 
 func TestDiagnoseWithoutLLMConfig(t *testing.T) {
@@ -51,6 +68,67 @@ func TestDiagnoseWithoutLLMConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAgentChatSendWithoutConfig(t *testing.T) {
+	svc := newTestService()
+	_, err := svc.AgentChatSend(t.Context(), "hello")
+	if err == nil {
+		t.Fatal("expected error without llm config")
+	}
+	if !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAgentChatSendEmptyMessage(t *testing.T) {
+	svc := newTestService()
+	if _, err := svc.AgentChatSend(t.Context(), "  "); err == nil {
+		t.Fatal("expected error for empty message")
+	}
+}
+
+func TestSetLLMConfigClosesChat(t *testing.T) {
+	svc := newTestService()
+	svc.SetLLMConfig(llm.Config{AgentCommand: "gemini"})
+	svc.AgentChatClose()
+	got := svc.LLMConfig()
+	if got.AgentCommand != "gemini" {
+		t.Fatalf("cfg = %+v", got)
+	}
+}
+
+func TestListAgentModelsSkipsUnknownAgent(t *testing.T) {
+	svc := newTestService()
+	got, err := svc.ListAgentModels(t.Context(), llm.Config{AgentCommand: "gemini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("unknown agent should not probe: %+v", got)
+	}
+}
+
+func TestListAgentModelsCursorMissingBinary(t *testing.T) {
+	svc := newTestService()
+	_, err := svc.ListAgentModels(t.Context(), llm.Config{
+		ActiveID: "cursor",
+		Agents:   []llm.AgentProfile{{ID: "cursor", Name: "Cursor CLI", Command: "definitely-not-a-real-command-upa", Args: []string{"acp"}}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestListAgentModelsMissingBinary(t *testing.T) {
+	svc := newTestService()
+	_, err := svc.ListAgentModels(t.Context(), llm.Config{
+		ActiveID: "codex",
+		Agents:   []llm.AgentProfile{{ID: "codex", Name: "Codex", Command: "definitely-not-a-real-command-upa"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
 	}
 }
 

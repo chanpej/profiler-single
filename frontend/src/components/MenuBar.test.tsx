@@ -59,6 +59,14 @@ describe('MenuBar', () => {
     expect(onFrames).toHaveBeenCalled();
   });
 
+  it('视图菜单切换 Agent 面板', async () => {
+    const onToggleAgent = vi.fn();
+    renderBar({ onToggleAgent, agentCollapsed: true });
+    await userEvent.click(screen.getByRole('menuitem', { name: '视图' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '展开 Agent 面板' }));
+    expect(onToggleAgent).toHaveBeenCalled();
+  });
+
   it('诊断与设置直接打开对应面板', async () => {
     const onAnalysis = vi.fn();
     const onSettings = vi.fn();

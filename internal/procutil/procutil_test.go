@@ -50,6 +50,20 @@ func TestHideConsoleWindows(t *testing.T) {
 	}
 }
 
+func TestHideConsoleSkipsCreateNoWindowForCmd(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("仅 Windows")
+	}
+	cmd := Command(`C:\fake\agent.cmd`, "acp")
+	const createNoWindow = 0x08000000
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.HideWindow {
+		t.Fatal("HideWindow 应为 true")
+	}
+	if cmd.SysProcAttr.CreationFlags&createNoWindow != 0 {
+		t.Fatal(".cmd 不应设置 CREATE_NO_WINDOW")
+	}
+}
+
 // 非 Windows 平台不应设置 SysProcAttr（保持零值，避免影响其他字段）。
 func TestHideConsoleOtherPlatforms(t *testing.T) {
 	if runtime.GOOS == "windows" {

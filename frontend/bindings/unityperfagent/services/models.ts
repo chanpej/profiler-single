@@ -6,6 +6,13 @@
 import * as protocol$0 from "../internal/protocol/models.js";
 
 /**
+ * AgentChunkEvent 是 ACP Agent 流式回复的一段文本。
+ */
+export interface AgentChunkEvent {
+    "text": string;
+}
+
+/**
  * Status 是连接状态快照。
  */
 export interface Status {

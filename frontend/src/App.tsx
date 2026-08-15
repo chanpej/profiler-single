@@ -4,15 +4,23 @@ import { api } from './api';
 import { captureDialogs } from './lib/captureDialog';
 import { loadPackageId, savePackageId } from './lib/packageIdStorage';
 import { createWindowControls } from './lib/window';
-import type { OverlayId, Stats, Status } from './types';
+import { formatErrorMessage, isUserCancelled } from './lib/userCancel';
+import { loadAgentCollapsed, loadAgentWidth, saveAgentCollapsed } from './lib/agentPanel';
+import { applyChatFontSize, loadChatFontSize } from './lib/chatAppearance';
+import { emptyLLMConfig, isAgentConfigured, normalizeLLMConfig, updateAgent, withActiveAgent } from './lib/llmConfig';
+import { applyLLMRuntime, loadLLMRuntime, saveLLMRuntime } from './lib/llmRuntimeStorage';
+import type { AgentProfile, LLMConfig, OverlayId, Stats, Status } from './types';
 import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
 import { AppDialog } from './components/AppDialog';
+import { ErrorPopup } from './components/ErrorPopup';
 import { ConnectBar } from './components/ConnectBar';
 import { FrameTable } from './components/FrameTable';
 import { AnalysisView } from './components/AnalysisView';
 import { SettingsView } from './components/SettingsView';
 import { ProfilerView } from './components/ProfilerView';
+import { AgentChatPanel } from './components/AgentChatPanel';
+import { StatusBar } from './components/StatusBar';
 
 const LIVE_REFRESH_MS = 200;
 const IDLE_REFRESH_MS = 500;
@@ -45,9 +53,12 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [packageId, setPackageId] = useState(loadPackageId);
   const [error, setError] = useState('');
-  const [llmReady, setLlmReady] = useState(false);
+  const [llm, setLlm] = useState<LLMConfig>(() => applyLLMRuntime(emptyLLMConfig, loadLLMRuntime()));
+  const [agentCollapsed, setAgentCollapsed] = useState(loadAgentCollapsed);
+  const [agentWidth, setAgentWidth] = useState(loadAgentWidth);
   const lastRefresh = useRef(0);
   const statusRef = useRef(status);
+  const shownLastError = useRef('');
   statusRef.current = status;
 
   const refresh = useCallback(async () => {
@@ -57,8 +68,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    applyChatFontSize(loadChatFontSize());
     refresh().catch(() => {});
-    api.llmConfig().then((cfg) => setLlmReady((cfg.agentCommand ?? '').trim() !== '')).catch(() => {});
+    api.llmConfig().then(async (cfg) => {
+      const next = applyLLMRuntime(cfg, loadLLMRuntime());
+      setLlm(next);
+      saveLLMRuntime(next);
+      await api.setLLMConfig(next);
+    }).catch(() => {});
     const off = api.onTick(() => {
       const now = Date.now();
       const live = statusRef.current.connected && statusRef.current.recording !== false;
@@ -70,14 +87,25 @@ function App() {
     return off;
   }, [refresh]);
 
+  useEffect(() => {
+    const le = (status.lastError ?? '').trim();
+    if (!le) {
+      shownLastError.current = '';
+      return;
+    }
+    if (le !== shownLastError.current) {
+      shownLastError.current = le;
+      setError(le);
+    }
+  }, [status.lastError]);
+
   const guard = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
-    setError('');
     try {
       await fn();
       await refresh();
     } catch (e) {
-      setError(String(e));
+      if (!isUserCancelled(e)) setError(formatErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -92,8 +120,36 @@ function App() {
   const getFrame = useCallback((index: number) => api.frameAt(index), []);
   const getHierarchy = useCallback((index: number) => api.frameHierarchy(index), []);
   const saveLLM = useCallback(async (cfg: Parameters<typeof api.setLLMConfig>[0]) => {
-    await api.setLLMConfig(cfg);
-    setLlmReady(cfg.agentCommand.trim() !== '');
+    const next = normalizeLLMConfig(cfg);
+    saveLLMRuntime(next);
+    await api.setLLMConfig(next);
+    setLlm(next);
+  }, []);
+
+  const onSelectAgent = useCallback((id: string) => {
+    setLlm((cur) => {
+      const next = withActiveAgent(cur, id);
+      saveLLMRuntime(next);
+      api.setLLMConfig(next).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const onUpdateAgent = useCallback((patch: Partial<AgentProfile> & { id: string }) => {
+    setLlm((cur) => {
+      const next = updateAgent(cur, patch);
+      saveLLMRuntime(next);
+      api.setLLMConfig(next).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const onToggleAgent = useCallback(() => {
+    setAgentCollapsed((cur) => {
+      const next = !cur;
+      saveAgentCollapsed(next);
+      return next;
+    });
   }, []);
 
   const recording = status.recording !== false;
@@ -124,8 +180,7 @@ function App() {
   };
 
   const fileName = (status.sourceFile ?? '').replace(/^.*[\\/]/, '');
-  // 操作报错优先，其次显示采集异常中断的原因（如数据流解析失步）。
-  const banner = error || (status.lastError ?? '');
+  const llmReady = isAgentConfigured(llm);
 
   return (
     <div className="app">
@@ -141,6 +196,8 @@ function App() {
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}
         onSettings={() => setOverlay('settings')}
+        onToggleAgent={onToggleAgent}
+        agentCollapsed={agentCollapsed}
       />
       <div className="app-body">
         <div className="app-main">
@@ -153,9 +210,6 @@ function App() {
             onUSB={() => guard(() => api.connectUSB('', packageId.trim()))}
             onClear={onClear}
           />
-          {banner && (
-            <div className="error-banner" role="alert">{banner}</div>
-          )}
 
           <ProfilerView
             totalCount={status.retained}
@@ -176,13 +230,28 @@ function App() {
             onCallStacks={onCallStacks}
           />
         </div>
+        <AgentChatPanel
+          llm={llm}
+          collapsed={agentCollapsed}
+          width={agentWidth}
+          onToggle={onToggleAgent}
+          onWidthChange={setAgentWidth}
+          onSelectAgent={onSelectAgent}
+          onUpdateAgent={onUpdateAgent}
+          listModels={api.listAgentModels}
+          agentChatSend={api.agentChatSend}
+          onChunk={api.onAgentChunk}
+        />
       </div>
+      <StatusBar status={status} busy={busy} agentName={llmReady ? (llm.agents.find((a) => a.id === llm.activeId)?.name ?? '') : ''} />
+
+      <ErrorPopup message={error} open={error !== ''} onClose={() => setError('')} />
 
       <AppDialog
         title={overlay ? overlayTitle[overlay] : ''}
         open={overlay !== null}
         onClose={() => setOverlay(null)}
-        wide={overlay === 'frames'}
+        wide={overlay === 'frames' || overlay === 'settings'}
       >
         {overlay === 'frames' && (
           <div className="frames-view">
@@ -192,7 +261,9 @@ function App() {
         {overlay === 'analysis' && (
           <AnalysisView analyze={() => api.analyze()} diagnose={() => api.diagnose()} llmReady={llmReady} />
         )}
-        {overlay === 'settings' && <SettingsView load={() => api.llmConfig()} save={saveLLM} />}
+        {overlay === 'settings' && (
+          <SettingsView load={() => api.llmConfig()} save={saveLLM} probe={api.probeAgent} />
+        )}
       </AppDialog>
     </div>
   );

@@ -30,6 +30,20 @@ import * as unityprofiler$0 from "../internal/unityprofiler/models.js";
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+/**
+ * AgentChatClose 结束当前 ACP 聊天会话。
+ */
+export function AgentChatClose(): $CancellablePromise<void> {
+    return $Call.ByID(4086997458);
+}
+
+/**
+ * AgentChatSend 向持久 ACP 会话发送一轮用户消息，流式片段通过 agent:chunk 事件推送。
+ */
+export function AgentChatSend(message: string): $CancellablePromise<string> {
+    return $Call.ByID(1667067564, message);
+}
+
 export function Analyze(): $CancellablePromise<analyzer$0.Report> {
     return $Call.ByID(1468977693);
 }
@@ -112,6 +126,21 @@ export function LLMConfig(): $CancellablePromise<llm$0.Config> {
 
 export function Latest(n: number): $CancellablePromise<protocol$0.FrameData[] | null> {
     return $Call.ByID(2464889728, n);
+}
+
+/**
+ * ListAgentModels 探测当前 Agent 支持的模型列表。
+ * Codex：`codex debug models`；Cursor：`agent --list-models`，失败则回退 ACP configOptions。
+ */
+export function ListAgentModels(cfg: llm$0.Config): $CancellablePromise<llm$0.AgentModel[] | null> {
+    return $Call.ByID(3004357042, cfg);
+}
+
+/**
+ * ProbeAgent 检测给定配置能否完成 ACP 握手。不打断当前聊天会话。
+ */
+export function ProbeAgent(cfg: llm$0.Config): $CancellablePromise<llm$0.ProbeResult> {
+    return $Call.ByID(712204988, cfg);
 }
 
 /**

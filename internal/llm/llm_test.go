@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,9 @@ func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (ac
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentInfo:       &acp.Implementation{Name: "fake-agent", Version: "0.0.1"},
+		AuthMethods: []acp.AuthMethod{
+			{Agent: &acp.AuthMethodAgent{Id: "cursor_login", Name: "Cursor Login"}},
+		},
 	}, nil
 }
 
@@ -170,5 +174,169 @@ func TestDiagnoseBadCommand(t *testing.T) {
 	defer cancel()
 	if _, err := c.Diagnose(ctx, "{}"); err == nil {
 		t.Fatal("expected error for missing agent command")
+	}
+}
+
+func TestChatSessionPromptOverInProcAgent(t *testing.T) {
+	agent := &fakeAgent{replyParts: []string{"你好，", "这是回复。"}}
+	w, r := startInProcAgent(t, agent)
+
+	sess := NewChatSession(Config{AgentCommand: "in-proc"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sess.startOver(ctx, w, r); err != nil {
+		t.Fatalf("startOver: %v", err)
+	}
+
+	var chunks []string
+	out, err := sess.Prompt(ctx, "卡顿原因？", func(c string) { chunks = append(chunks, c) })
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if out != "你好，这是回复。" {
+		t.Fatalf("out = %q", out)
+	}
+	if strings.Join(chunks, "") != out {
+		t.Fatalf("chunks = %q, out = %q", chunks, out)
+	}
+	if !strings.Contains(agent.lastPrompt, "Unity 2022") {
+		t.Fatalf("first prompt should include system hint: %q", agent.lastPrompt)
+	}
+
+	agent.replyParts = []string{"第二轮。"}
+	out2, err := sess.Prompt(ctx, "还有呢？", nil)
+	if err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	if out2 != "第二轮。" {
+		t.Fatalf("out2 = %q", out2)
+	}
+	if strings.Contains(agent.lastPrompt, chatSystemHint) {
+		t.Fatalf("second prompt should not repeat system hint: %q", agent.lastPrompt)
+	}
+}
+
+func TestChatSessionStartNotConfigured(t *testing.T) {
+	sess := NewChatSession(Config{})
+	if err := sess.Start(context.Background()); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+}
+
+func TestChatSessionPromptBeforeStart(t *testing.T) {
+	sess := NewChatSession(Config{AgentCommand: "x"})
+	if _, err := sess.Prompt(context.Background(), "hi", nil); err == nil {
+		t.Fatal("expected error before Start")
+	}
+}
+
+func TestChatSessionEmptyPrompt(t *testing.T) {
+	sess := NewChatSession(Config{AgentCommand: "x"})
+	if _, err := sess.Prompt(context.Background(), "  ", nil); err == nil {
+		t.Fatal("expected error for empty prompt")
+	}
+}
+
+func TestChatSessionSpawnsAgentProcess(t *testing.T) {
+	t.Setenv(fakeAgentEnv, "1")
+
+	sess := NewChatSession(Config{AgentCommand: os.Args[0]})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := sess.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer sess.Close()
+
+	out, err := sess.Prompt(ctx, "请诊断", nil)
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if !strings.Contains(out, "对象池") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestDefaultAgentsOfficialACP(t *testing.T) {
+	agents := DefaultAgents()
+	if len(agents) != 2 {
+		t.Fatalf("len = %d", len(agents))
+	}
+	if agents[0].ID != "codex" || agents[0].Command != "codex" {
+		t.Fatalf("codex = %+v", agents[0])
+	}
+	if len(agents[0].Args) != 0 {
+		t.Fatalf("codex args = %v", agents[0].Args)
+	}
+	if agents[1].ID != "cursor" || agents[1].Command != "agent" || strings.Join(agents[1].Args, " ") != "acp" {
+		t.Fatalf("cursor = %+v", agents[1])
+	}
+}
+
+func TestNormalizePreservesLegacyAndDefaults(t *testing.T) {
+	got := Config{AgentCommand: "gemini", AgentArgs: []string{"--experimental-acp"}}.Normalize()
+	if got.ActiveID != "custom" || got.AgentCommand != "gemini" {
+		t.Fatalf("got = %+v", got)
+	}
+	if len(got.Agents) != 3 {
+		t.Fatalf("agents = %d", len(got.Agents))
+	}
+	codex := got.WithActive("codex")
+	if codex.AgentCommand != "codex" {
+		t.Fatalf("switch codex command = %q", codex.AgentCommand)
+	}
+}
+
+func TestProbeMissingCommand(t *testing.T) {
+	r := Probe(context.Background(), Config{AgentCommand: "definitely-not-a-real-command-upa"})
+	if r.OK {
+		t.Fatal("expected probe failure")
+	}
+	if !strings.Contains(r.Message, "找不到可执行文件") {
+		t.Fatalf("msg = %q", r.Message)
+	}
+}
+
+func TestProbeEmptyCommand(t *testing.T) {
+	r := Probe(context.Background(), Config{Agents: []AgentProfile{{ID: "x", Name: "x"}}})
+	if r.OK || !strings.Contains(r.Message, "未配置") {
+		t.Fatalf("probe = %+v", r)
+	}
+}
+
+func TestProbeCancelledContextFailsFast(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := Probe(ctx, Config{AgentCommand: os.Args[0]})
+	if r.OK {
+		t.Fatalf("probe = %+v", r)
+	}
+}
+
+func TestProbeCodexGoAdapter(t *testing.T) {
+	if _, err := exec.LookPath("codex"); err != nil {
+		t.Skip("PATH 上没有 codex")
+	}
+	prev := runCodexExec
+	t.Cleanup(func() { runCodexExec = prev })
+	runCodexExec = func(context.Context, string, string, AgentProfile, func(string)) error {
+		t.Fatal("probe 不应调用 codex exec")
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := Probe(ctx, Config{ActiveID: "codex", Agents: DefaultAgents()})
+	if !r.OK {
+		t.Fatalf("codex probe: %+v", r)
+	}
+}
+
+func TestProbeSpawnsAgentProcess(t *testing.T) {
+	t.Setenv(fakeAgentEnv, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	r := Probe(ctx, Config{AgentCommand: os.Args[0]})
+	if !r.OK {
+		t.Fatalf("probe: %+v", r)
 	}
 }

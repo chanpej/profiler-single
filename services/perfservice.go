@@ -28,6 +28,9 @@ import (
 // TickEventName 是采集进度事件名，前端据此增量刷新。
 const TickEventName = "perf:tick"
 
+// AgentChunkEventName 是 ACP 聊天流式文本事件名。
+const AgentChunkEventName = "agent:chunk"
+
 const tickInterval = 250 * time.Millisecond
 
 // TickEvent 是推送给前端的采集进度。
@@ -36,6 +39,11 @@ type TickEvent struct {
 	Retained    int    `json:"retained"`
 	Connected   bool   `json:"connected"`
 	Recording   bool   `json:"recording"`
+}
+
+// AgentChunkEvent 是 ACP Agent 流式回复的一段文本。
+type AgentChunkEvent struct {
+	Text string `json:"text"`
 }
 
 // Status 是连接状态快照。
@@ -82,6 +90,7 @@ type PerfService struct {
 	deep       bool
 	callStacks bool
 	lastErr    string
+	chat       *llm.ChatSession
 
 	// tickReq 是"界面需要刷新"的合并信号，容量 1 且非阻塞投递。
 	tickReq chan struct{}
@@ -115,6 +124,7 @@ func (p *PerfService) ServiceStartup(ctx context.Context, options application.Se
 
 func (p *PerfService) ServiceShutdown() error {
 	p.Disconnect()
+	p.AgentChatClose()
 	close(p.stopUI)
 	p.mu.Lock()
 	f := p.logFile
@@ -474,15 +484,102 @@ func (p *PerfService) Analyze() analyzer.Report {
 }
 
 func (p *PerfService) SetLLMConfig(cfg llm.Config) {
+	cfg = cfg.Normalize()
 	p.mu.Lock()
+	old := p.llmCfg
 	p.llmCfg = cfg
+	chat := p.chat
+	restart := chat != nil && llm.ShouldRestartChat(old, cfg)
+	if restart {
+		p.chat = nil
+	} else if chat != nil {
+		chat.UpdateConfig(cfg)
+	}
 	p.mu.Unlock()
+	if restart {
+		chat.Close()
+	}
+}
+
+// ProbeAgent 检测给定配置能否完成 ACP 握手。不打断当前聊天会话。
+func (p *PerfService) ProbeAgent(ctx context.Context, cfg llm.Config) llm.ProbeResult {
+	return llm.Probe(ctx, cfg)
+}
+
+// ListAgentModels 探测当前 Agent 支持的模型列表。
+// Codex：`codex debug models`；Cursor：`agent --list-models`，失败则回退 ACP configOptions。
+func (p *PerfService) ListAgentModels(ctx context.Context, cfg llm.Config) ([]llm.AgentModel, error) {
+	cfg = cfg.Normalize()
+	launch := cfg.Launch()
+	if llm.IsCodexCLI(launch) {
+		return llm.ListCodexModels(ctx, launch)
+	}
+	if llm.IsCursorCLI(launch) {
+		return llm.ListCursorModels(ctx, launch)
+	}
+	return nil, nil
+}
+
+// AgentChatSend 向持久 ACP 会话发送一轮用户消息，流式片段通过 agent:chunk 事件推送。
+func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return "", errors.New("消息为空")
+	}
+	sess, err := p.ensureChat()
+	if err != nil {
+		return "", err
+	}
+	p.mu.Lock()
+	emit := p.emit
+	p.mu.Unlock()
+	return sess.Prompt(ctx, message, func(chunk string) {
+		emit(AgentChunkEventName, AgentChunkEvent{Text: chunk})
+	})
+}
+
+// AgentChatClose 结束当前 ACP 聊天会话。
+func (p *PerfService) AgentChatClose() {
+	p.mu.Lock()
+	chat := p.chat
+	p.chat = nil
+	p.mu.Unlock()
+	if chat != nil {
+		chat.Close()
+	}
+}
+
+func (p *PerfService) ensureChat() (*llm.ChatSession, error) {
+	p.mu.Lock()
+	if p.chat != nil {
+		sess := p.chat
+		p.mu.Unlock()
+		return sess, nil
+	}
+	cfg := p.llmCfg
+	p.mu.Unlock()
+
+	sess := llm.NewChatSession(cfg)
+	if err := sess.Start(context.Background()); err != nil {
+		return nil, err
+	}
+
+	p.mu.Lock()
+	if p.chat != nil {
+		existing := p.chat
+		p.mu.Unlock()
+		sess.Close()
+		return existing, nil
+	}
+	p.chat = sess
+	p.mu.Unlock()
+	return sess, nil
 }
 
 func (p *PerfService) LLMConfig() llm.Config {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.llmCfg
+	return p.llmCfg.Normalize()
 }
 
 func (p *PerfService) Diagnose(ctx context.Context) (string, error) {

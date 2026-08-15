@@ -7,6 +7,7 @@ export {
 };
 
 export type {
+    AgentChunkEvent,
     Status,
     TickEvent
 } from "./models.js";

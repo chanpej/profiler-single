@@ -27,6 +27,25 @@ describe('captureDialogs', () => {
     await expect(captureDialogs.open()).resolves.toBe('');
   });
 
+  it('open 用户取消对话框时不抛错', async () => {
+    vi.mocked(Dialogs.OpenFile).mockRejectedValue(
+      new Error('Invalid dialog call: Dialog.OpenFile failed, error getting selection: cancelled by user'),
+    );
+    await expect(captureDialogs.open()).resolves.toBe('');
+  });
+
+  it('save 用户取消对话框时不抛错', async () => {
+    vi.mocked(Dialogs.SaveFile).mockRejectedValue(
+      new Error('Invalid dialog call: Dialog.SaveFile failed, error getting selection: cancelled by user'),
+    );
+    await expect(captureDialogs.save()).resolves.toBe('');
+  });
+
+  it('open 其它错误仍然抛出', async () => {
+    vi.mocked(Dialogs.OpenFile).mockRejectedValue(new Error('disk error'));
+    await expect(captureDialogs.open()).rejects.toThrow('disk error');
+  });
+
   it('open 多选结果取第一项', async () => {
     vi.mocked(Dialogs.OpenFile).mockResolvedValue(['a.upac', 'b.upac'] as unknown as string);
     await expect(captureDialogs.open()).resolves.toBe('a.upac');
