@@ -568,6 +568,11 @@ body {
   min-height: 0;
   overflow: auto;
 }
+.profiler-detail-body:has(> .sample-hierarchy) {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 
 .profiler-detail-head {
   display: flex;
@@ -609,9 +614,17 @@ body {
 .profiler-table td:last-child, .profiler-table th:last-child { text-align: right; }
 .profiler-table tr.is-selected td { background: rgba(56, 189, 248, 0.12); }
 
-.hierarchy-cell { display: inline-flex; align-items: center; gap: 4px; }
+.hierarchy-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
 .hierarchy-toggle {
   width: 16px;
+  flex-shrink: 0;
   border: 0;
   background: transparent;
   color: var(--text-dim);
@@ -620,22 +633,139 @@ body {
   line-height: 1;
 }
 .hierarchy-toggle.is-leaf { display: inline-block; }
-
-.sample-hierarchy { display: flex; gap: 12px; min-height: 0; }
-.sample-hierarchy .profiler-table { flex: 1; }
-.callstack-pane {
-  width: 280px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--border);
-  padding-left: 12px;
+.hierarchy-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.callstack-pane h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+
+.sample-hierarchy {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.hierarchy-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.hierarchy-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.hierarchy-table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+}
+.hierarchy-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-panel);
+}
+.hierarchy-table th,
+.hierarchy-table td {
+  white-space: nowrap;
+}
+.hierarchy-table .col-overview {
+  position: relative;
+  min-width: var(--overview-w);
+  overflow: hidden;
+}
+.hierarchy-table .col-metric {
+  white-space: nowrap;
+  text-align: right;
+}
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resize:hover,
+.col-resize:focus {
+  background: rgba(56, 189, 248, 0.45);
+}
+.callstack-resize {
+  flex: 0 0 5px;
+  align-self: stretch;
+  cursor: ew-resize;
+  z-index: 2;
+  background: transparent;
+}
+.callstack-resize:hover,
+.callstack-resize:focus {
+  background: rgba(56, 189, 248, 0.45);
+}
+.callstack-pane {
+  flex: 0 0 auto;
+  width: calc(var(--callstack-ratio, 0.32) * 100%);
+  min-width: 160px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+}
+.callstack-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.callstack-pane h3,
+.callstack-toolbar h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.callstack-toolbar .btn.ghost {
+  border-color: transparent;
+  height: 22px;
+  min-width: 22px;
+  color: var(--text-dim);
+}
+.callstack-toolbar .btn.ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.callstack-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.callstack-body .dim {
+  margin: 0;
+  padding: 8px;
+  white-space: normal;
+}
 .callstack-list {
   margin: 0;
+  padding: 8px;
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  user-select: text;
+  width: max-content;
+  min-width: 100%;
 }
 
 .cpu-timeline { display: flex; flex-direction: column; gap: 8px; }

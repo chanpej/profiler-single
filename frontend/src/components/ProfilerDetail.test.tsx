@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProfilerDetail } from './ProfilerDetail';
 import { emptyFrame } from '../lib/frame';
+import { DEFAULT_CALLSTACK_RATIO, DEFAULT_OVERVIEW_WIDTH } from '../lib/hierarchyLayout';
 
 const frame = emptyFrame({
   cpuTimeMs: 16.4,
@@ -32,6 +33,7 @@ const frame = emptyFrame({
 });
 
 describe('ProfilerDetail', () => {
+  afterEach(() => localStorage.clear());
   it('CPU Hierarchy 列出 Rendering / Scripts', () => {
     render(<ProfilerDetail moduleId="cpu" frame={frame} />);
     expect(screen.getByText('Rendering')).toBeInTheDocument();
@@ -158,5 +160,100 @@ describe('ProfilerDetail', () => {
 
     rerender(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={[{ ...tree[0], children: [...tree[0].children!] }]} />);
     expect(screen.queryByText('BehaviourUpdate')).not.toBeInTheDocument();
+  });
+
+  it('Hierarchy 表头固定在独立滚动容器内，函数名截断并带完整名称气泡', () => {
+    const tree = [{
+      name: 'VeryLong.PlayerController.LateUpdate.FillDrawCall.Something',
+      category: 'Scripts',
+      totalMs: 16,
+      selfMs: 16,
+      calls: 1,
+      gcAllocKB: 0,
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} />);
+    expect(screen.getByTestId('hierarchy-scroll')).toBeInTheDocument();
+    const name = screen.getByText(tree[0].name);
+    expect(name).toHaveClass('hierarchy-name');
+    expect(name).toHaveAttribute('title', tree[0].name);
+    expect(screen.getByTestId('cpu-hierarchy').style.getPropertyValue('--overview-w')).toBe(`${DEFAULT_OVERVIEW_WIDTH}px`);
+    const cols = screen.getByTestId('hierarchy-table').querySelectorAll('col');
+    expect(cols).toHaveLength(5);
+    expect(cols[0]).toHaveClass('col-overview');
+    for (let i = 1; i < cols.length; i++) {
+      expect(Number.parseInt(cols[i].style.width, 10)).toBeGreaterThan(0);
+    }
+  });
+
+  it('拖拽 Overview 列宽，展开树后列宽不变', async () => {
+    const tree = [{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 16,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      children: [{
+        name: 'BehaviourUpdate',
+        category: 'Scripts',
+        totalMs: 8,
+        selfMs: 8,
+        calls: 1,
+        gcAllocKB: 0,
+      }],
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} />);
+    const handle = screen.getByTestId('overview-resize');
+    fireEvent.pointerDown(handle, { clientX: 100, pointerId: 1 });
+    fireEvent.pointerMove(handle, { clientX: 180, pointerId: 1 });
+    fireEvent.pointerUp(handle, { clientX: 180, pointerId: 1 });
+    const afterDrag = screen.getByTestId('cpu-hierarchy').style.getPropertyValue('--overview-w');
+    expect(afterDrag).toBe('400px');
+
+    await userEvent.click(screen.getByLabelText('折叠'));
+    expect(screen.queryByText('BehaviourUpdate')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('展开'));
+    expect(screen.getByText('BehaviourUpdate')).toBeInTheDocument();
+    expect(screen.getByTestId('cpu-hierarchy').style.getPropertyValue('--overview-w')).toBe(afterDrag);
+  });
+
+  it('Call Stacks 独立分栏可拖拽，复制写入剪贴板', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const tree = [{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 16,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      children: [{
+        name: 'GC.Alloc',
+        category: 'GC',
+        totalMs: 0.1,
+        selfMs: 0.1,
+        calls: 1,
+        gcAllocKB: 4,
+        callstack: ['GC.Alloc', 'PlayerController.Update ()'],
+      }],
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} callStacks />);
+    const copyBtn = screen.getByRole('button', { name: '复制' });
+    expect(copyBtn).toBeDisabled();
+
+    const split = screen.getByTestId('callstack-resize');
+    fireEvent.pointerDown(split, { clientX: 700, pointerId: 1 });
+    fireEvent.pointerMove(split, { clientX: 600, pointerId: 1 });
+    fireEvent.pointerUp(split, { clientX: 600, pointerId: 1 });
+    const pane = screen.getByTestId('callstack-pane');
+    expect(pane.style.width).not.toBe(`${DEFAULT_CALLSTACK_RATIO * 100}%`);
+
+    await userEvent.click(screen.getByText('GC.Alloc'));
+    expect(copyBtn).toBeEnabled();
+    await userEvent.click(copyBtn);
+    expect(writeText).toHaveBeenCalledWith('GC.Alloc\nPlayerController.Update ()');
   });
 });

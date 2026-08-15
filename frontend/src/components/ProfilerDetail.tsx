@@ -1,8 +1,20 @@
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { ClipboardCopy } from 'lucide-react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
 import { memorySimpleRows, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
 import { formatCount, formatFps, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
 import { categoryColor, flattenVisible, mergeExpanded } from '../lib/hierarchy';
+import { copyText } from '../lib/agentChatUi';
+import {
+  callstackRatioFromPointer,
+  loadCallstackRatio,
+  loadOverviewWidth,
+  METRIC_HEADERS,
+  metricColumnWidths,
+  overviewWidthFromDrag,
+  saveCallstackRatio,
+  saveOverviewWidth,
+} from '../lib/hierarchyLayout';
 
 interface Props {
   moduleId: ProfilerModuleId;
@@ -96,88 +108,219 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
   const expandOpts = { revealCallstacks: callStacks };
   const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), nodes, touched.current, expandOpts));
   const [selected, setSelected] = useState<string>('');
+  const [overviewW, setOverviewW] = useState(loadOverviewWidth);
+  const [callstackRatio, setCallstackRatio] = useState(loadCallstackRatio);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const overviewDrag = useRef<{ startX: number; startW: number } | null>(null);
+  const stackDrag = useRef(false);
+  const overviewWRef = useRef(overviewW);
+  overviewWRef.current = overviewW;
+  const callstackRatioRef = useRef(callstackRatio);
+  callstackRatioRef.current = callstackRatio;
 
   const visibleExpanded = useMemo(
     () => mergeExpanded(expanded, nodes, touched.current, { revealCallstacks: callStacks }),
     [expanded, nodes, callStacks],
   );
   const rows = useMemo(() => flattenVisible(nodes, visibleExpanded), [nodes, visibleExpanded]);
+  const metricValues = useMemo(
+    () => rows.map((r) => [
+      formatMs(r.node.totalMs),
+      formatMs(r.node.selfMs),
+      String(r.node.calls),
+      r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—',
+    ]),
+    [rows],
+  );
+  const metricWidths = useMemo(
+    () => metricColumnWidths(METRIC_HEADERS, metricValues),
+    [metricValues],
+  );
   const selectedRow = rows.find((r) => r.path === selected);
   const stack = selectedRow?.node.callstack ?? [];
+  const stackText = stack.join('\n');
   // 本帧是否真的带调用栈：Player 只在发生分配的帧写调用栈，空面板要能说清是哪种"空"。
   const frameHasStack = useMemo(() => rows.some((r) => (r.node.callstack?.length ?? 0) > 0), [rows]);
 
+  const onOverviewPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    overviewDrag.current = { startX: e.clientX, startW: overviewWRef.current };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, []);
+
+  const onOverviewPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!overviewDrag.current) return;
+    setOverviewW(overviewWidthFromDrag(overviewDrag.current.startW, overviewDrag.current.startX, e.clientX));
+  }, []);
+
+  const onOverviewPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!overviewDrag.current) return;
+    overviewDrag.current = null;
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // capture 可能已释放
+    }
+    saveOverviewWidth(overviewWRef.current);
+  }, []);
+
+  const onStackPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    stackDrag.current = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, []);
+
+  const onStackPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!stackDrag.current || !rootRef.current) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    setCallstackRatio(callstackRatioFromPointer(rect.width, rect.left, e.clientX));
+  }, []);
+
+  const onStackPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!stackDrag.current) return;
+    stackDrag.current = false;
+    try {
+      e.currentTarget.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // capture 可能已释放
+    }
+    saveCallstackRatio(callstackRatioRef.current);
+  }, []);
+
   return (
-    <div className="sample-hierarchy" data-testid="cpu-hierarchy">
-      <table className="profiler-table">
-        <thead>
-          <tr>
-            <th>Overview</th>
-            <th>Total</th>
-            <th>Self</th>
-            <th>Calls</th>
-            <th>GC Alloc</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.path}
-              className={selected === r.path ? 'is-selected' : ''}
-              onClick={() => setSelected(r.path)}
-            >
-              <td>
-                <span className="hierarchy-cell" style={{ paddingLeft: r.depth * 14 }}>
-                  {r.hasChildren ? (
-                    <button
-                      type="button"
-                      className="hierarchy-toggle"
-                      aria-label={visibleExpanded.has(r.path) ? '折叠' : '展开'}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        touched.current.add(r.path);
-                        setExpanded((cur) => {
-                          const next = new Set(mergeExpanded(cur, nodes, touched.current, { revealCallstacks: callStacks }));
-                          if (next.has(r.path)) next.delete(r.path);
-                          else next.add(r.path);
-                          return next;
-                        });
-                      }}
-                    >
-                      {visibleExpanded.has(r.path) ? '▾' : '▸'}
-                    </button>
-                  ) : (
-                    <span className="hierarchy-toggle is-leaf" />
-                  )}
-                  <span className="swatch" style={{ background: categoryColor(r.node.category) }} />
-                  {r.node.name}
-                </span>
-              </td>
-              <td className="mono">{formatMs(r.node.totalMs)}</td>
-              <td className="mono">{formatMs(r.node.selfMs)}</td>
-              <td className="mono">{r.node.calls}</td>
-              <td className="mono">{r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {callStacks && (
-        <div className="callstack-pane" data-testid="callstack-pane">
-          <h3>Call Stacks</h3>
-          {stack.length > 0 ? (
-            <pre className="callstack-list">{stack.join('\n')}</pre>
-          ) : frameHasStack ? (
-            <p className="dim">
-              本帧带调用栈的采样已自动展开（GC.Alloc 一类的分配采样），点中它即可查看。
-              IL2CPP 包里多数栈帧是引擎原生代码，没有符号可查，显示为十六进制地址。
-            </p>
-          ) : (
-            <p className="dim">
-              本帧没有带调用栈的分配采样。调用栈只对开启 Call Stacks 之后采集的帧生效，
-              可在上方帧列表里挑一帧 GC Alloc 不为 0 的帧查看。
-            </p>
-          )}
+    <div
+      className="sample-hierarchy"
+      data-testid="cpu-hierarchy"
+      ref={rootRef}
+      style={{
+        '--overview-w': `${overviewW}px`,
+        '--callstack-ratio': String(callstackRatio),
+      } as React.CSSProperties}
+    >
+      <div className="hierarchy-pane">
+        <div className="hierarchy-scroll" data-testid="hierarchy-scroll">
+          <table className="profiler-table hierarchy-table" data-testid="hierarchy-table">
+            <colgroup>
+              <col className="col-overview" />
+              {metricWidths.map((w, i) => (
+                <col key={METRIC_HEADERS[i]} className="col-metric" style={{ width: w }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="col-overview">
+                  Overview
+                  <div
+                    className="col-resize"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整 Overview 列宽"
+                    data-testid="overview-resize"
+                    onPointerDown={onOverviewPointerDown}
+                    onPointerMove={onOverviewPointerMove}
+                    onPointerUp={onOverviewPointerUp}
+                    onPointerCancel={onOverviewPointerUp}
+                  />
+                </th>
+                <th className="col-metric">Total</th>
+                <th className="col-metric">Self</th>
+                <th className="col-metric">Calls</th>
+                <th className="col-metric">GC Alloc</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr
+                  key={r.path}
+                  className={selected === r.path ? 'is-selected' : ''}
+                  onClick={() => setSelected(r.path)}
+                >
+                  <td className="col-overview">
+                    <span className="hierarchy-cell" style={{ paddingLeft: r.depth * 14 }}>
+                      {r.hasChildren ? (
+                        <button
+                          type="button"
+                          className="hierarchy-toggle"
+                          aria-label={visibleExpanded.has(r.path) ? '折叠' : '展开'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            touched.current.add(r.path);
+                            setExpanded((cur) => {
+                              const next = new Set(mergeExpanded(cur, nodes, touched.current, { revealCallstacks: callStacks }));
+                              if (next.has(r.path)) next.delete(r.path);
+                              else next.add(r.path);
+                              return next;
+                            });
+                          }}
+                        >
+                          {visibleExpanded.has(r.path) ? '▾' : '▸'}
+                        </button>
+                      ) : (
+                        <span className="hierarchy-toggle is-leaf" />
+                      )}
+                      <span className="swatch" style={{ background: categoryColor(r.node.category) }} />
+                      <span className="hierarchy-name" title={r.node.name}>{r.node.name}</span>
+                    </span>
+                  </td>
+                  <td className="mono col-metric">{formatMs(r.node.totalMs)}</td>
+                  <td className="mono col-metric">{formatMs(r.node.selfMs)}</td>
+                  <td className="mono col-metric">{r.node.calls}</td>
+                  <td className="mono col-metric">{r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      </div>
+      {callStacks && (
+        <>
+          <div
+            className="callstack-resize"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整 Call Stacks 宽度"
+            data-testid="callstack-resize"
+            onPointerDown={onStackPointerDown}
+            onPointerMove={onStackPointerMove}
+            onPointerUp={onStackPointerUp}
+            onPointerCancel={onStackPointerUp}
+          />
+          <div
+            className="callstack-pane"
+            data-testid="callstack-pane"
+            style={{ width: `${callstackRatio * 100}%` }}
+          >
+            <div className="callstack-toolbar">
+              <h3>Call Stacks</h3>
+              <button
+                type="button"
+                className="btn ghost"
+                aria-label="复制"
+                title="复制"
+                disabled={stack.length === 0}
+                onClick={() => { void copyText(stackText); }}
+              >
+                <ClipboardCopy size={14} aria-hidden />
+              </button>
+            </div>
+            <div className="callstack-body">
+              {stack.length > 0 ? (
+                <pre className="callstack-list">{stackText}</pre>
+              ) : frameHasStack ? (
+                <p className="dim">
+                  本帧带调用栈的采样已自动展开（GC.Alloc 一类的分配采样），点中它即可查看。
+                  IL2CPP 包里多数栈帧是引擎原生代码，没有符号可查，显示为十六进制地址。
+                </p>
+              ) : (
+                <p className="dim">
+                  本帧没有带调用栈的分配采样。调用栈只对开启 Call Stacks 之后采集的帧生效，
+                  可在上方帧列表里挑一帧 GC Alloc 不为 0 的帧查看。
+                </p>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
