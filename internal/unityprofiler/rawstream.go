@@ -54,11 +54,11 @@ type StreamHeader struct {
 // ParseStreamHeader 解析 56 字节流头。
 func ParseStreamHeader(b []byte) (StreamHeader, error) {
 	if len(b) < streamHeaderSize {
-		return StreamHeader{}, fmt.Errorf("unityprofiler: stream header %d bytes, want %d", len(b), streamHeaderSize)
+		return StreamHeader{}, fmt.Errorf("流头长度 %d 字节，需要 %d 字节", len(b), streamHeaderSize)
 	}
 	le := binary.LittleEndian
 	if got := le.Uint32(b[0:4]); got != streamMagic {
-		return StreamHeader{}, fmt.Errorf("unityprofiler: bad stream magic %08x", got)
+		return StreamHeader{}, fmt.Errorf("流头魔数无效 %#x", got)
 	}
 	return StreamHeader{
 		FormatVersion: le.Uint32(b[8:12]),

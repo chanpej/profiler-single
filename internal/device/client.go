@@ -72,6 +72,13 @@ func (c *Client) ProfilerOptions() (deep, callStacks bool) {
 	return c.sess.ProfilerOptions()
 }
 
+// SetRawHandler 注册原始 Profiler 报文体回调，在解码前原样送达。
+func (c *Client) SetRawHandler(fn func([]byte)) {
+	if c.sess != nil {
+		c.sess.SetRawHandler(fn)
+	}
+}
+
 // Close 断开 Profiler 连接。
 func (c *Client) Close() {
 	if c.sess != nil {

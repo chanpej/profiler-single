@@ -9,7 +9,7 @@ export interface Viewport {
   start: number;
   /** 可见帧数，越小越放大。 */
   visible: number;
-  /** 选中帧绝对下标。 */
+  /** 选中帧绝对下标；-1 表示未选中。 */
   selected: number;
   /** 为 true 时窗口钉在最新帧，随采集实时滚动。 */
   follow: boolean;
@@ -31,16 +31,21 @@ export function clampVisible(visible: number, total: number): number {
 
 export function clampViewport(vp: Viewport, total: number): Viewport {
   if (total <= 0) {
-    return { start: 0, visible: clampVisible(vp.visible, 0), selected: 0, follow: true };
+    return { start: 0, visible: clampVisible(vp.visible, 0), selected: -1, follow: true };
   }
   const visible = clampVisible(vp.visible, total);
   const follow = vp.follow;
   const start = follow
     ? maxStart(total, visible)
     : Math.max(0, Math.min(vp.start, maxStart(total, visible)));
-  const selected = follow
-    ? total - 1
-    : Math.max(0, Math.min(vp.selected, total - 1));
+  let selected = vp.selected;
+  if (selected < 0) {
+    selected = -1;
+  } else if (follow) {
+    selected = total - 1;
+  } else {
+    selected = Math.max(0, Math.min(selected, total - 1));
+  }
   return { start, visible, selected, follow };
 }
 
@@ -90,8 +95,9 @@ export function seekTo(vp: Viewport, total: number, selected: number): Viewport 
   return clampViewport({ ...vp, selected: s, start, follow }, total);
 }
 
+/** 跳到最新帧并跟随，同时取消选中，避免详情面板跟着最新帧刷新。 */
 export function goCurrent(vp: Viewport, total: number): Viewport {
-  return clampViewport({ ...vp, follow: true, selected: Math.max(0, total - 1) }, total);
+  return clampViewport({ ...vp, follow: true, selected: -1 }, total);
 }
 
 /** 滚轮缩放系数：向上放大，向下缩小。 */

@@ -8,6 +8,7 @@ export {
 
 export type {
     AgentChunkEvent,
+    ImportProgressEvent,
     Status,
     TickEvent
 } from "./models.js";

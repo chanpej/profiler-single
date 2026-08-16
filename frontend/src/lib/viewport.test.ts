@@ -41,6 +41,16 @@ describe('clampViewport follow', () => {
     expect(got.visible).toBe(300);
     expect(got.selected).toBe(499);
   });
+  it('跟随且未选中时保持未选中', () => {
+    const got = clampViewport(vp({ follow: true, visible: 300, selected: -1 }), 500);
+    expect(got.start).toBe(200);
+    expect(got.follow).toBe(true);
+    expect(got.selected).toBe(-1);
+  });
+  it('无帧时选中为 -1', () => {
+    const got = clampViewport(vp({ follow: true, selected: 0 }), 0);
+    expect(got.selected).toBe(-1);
+  });
   it('采集增长时跟随窗口右移（实时滚动）', () => {
     let cur = clampViewport(vp({ follow: true, visible: 300, selected: 299 }), 300);
     expect(cur.start).toBe(0);
@@ -105,10 +115,10 @@ describe('panViewport / select / seek', () => {
     expect(got.selected).toBe(20);
     expect(got.follow).toBe(false);
   });
-  it('Current 恢复跟随并跳到最新', () => {
+  it('Current 恢复跟随并取消选中', () => {
     const got = goCurrent(vp({ follow: false, start: 0, visible: 300, selected: 3 }), 500);
     expect(got.follow).toBe(true);
-    expect(got.selected).toBe(499);
+    expect(got.selected).toBe(-1);
     expect(got.start).toBe(200);
   });
   it('setViewportStart 暂停跟随', () => {

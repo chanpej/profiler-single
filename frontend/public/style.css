@@ -381,7 +381,6 @@ body {
 .profiler-record.is-on { color: var(--bad); }
 .profiler-pause { color: var(--text-dim); padding: 0 6px; }
 .profiler-pause.is-on { color: var(--warn); }
-.profiler-file { margin-left: auto; font-size: 11px; }
 .profiler-frame-empty {
   display: inline-flex;
   align-items: center;
@@ -1101,6 +1100,83 @@ code {
   user-select: text;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---------- 自绘解析进度弹窗 ---------- */
+
+.progress-popup-backdrop {
+  position: fixed;
+  inset: 36px 0 22px;
+  background: rgba(6, 8, 12, 0.45);
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 24px 24px;
+}
+
+.progress-popup {
+  width: min(380px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.progress-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--accent);
+}
+.progress-popup-head h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.progress-popup-spin {
+  animation: progress-spin 0.9s linear infinite;
+}
+
+@keyframes progress-spin {
+  to { transform: rotate(360deg); }
+}
+
+.progress-popup-body {
+  padding: 12px 14px 14px;
+}
+
+.progress-popup-file {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.12s linear;
+}
+
+.progress-popup-pct {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: right;
 }
 
 /* ---------- Agent Chat 面板 ---------- */

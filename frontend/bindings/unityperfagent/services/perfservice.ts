@@ -87,7 +87,7 @@ export function DiscoverPlayers(): $CancellablePromise<unityprofiler$0.PlayerInf
 }
 
 /**
- * ExportCapture 将当前会话导出为紧凑二进制 .upac 文件。
+ * ExportCapture 将当前会话的原始 Profiler 数据流导出为 .upac 文件。
  */
 export function ExportCapture(path: string): $CancellablePromise<void> {
     return $Call.ByID(240066965, path);
@@ -113,7 +113,8 @@ export function Frames(offset: number, limit: number): $CancellablePromise<proto
 }
 
 /**
- * ImportCapture 加载紧凑二进制存档并替换当前会话数据。
+ * ImportCapture 加载存档并按当前解码器重新分析。
+ * v2 文件重放原始 Profiler 流；v1 旧文件仅还原已解码帧（无 Hierarchy）。
  * 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
  */
 export function ImportCapture(path: string): $CancellablePromise<number> {

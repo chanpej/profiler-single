@@ -5,6 +5,7 @@
 package collector
 
 import (
+	"encoding/binary"
 	"math"
 	"sort"
 	"sync"
@@ -12,8 +13,12 @@ import (
 	"unityperfagent/internal/protocol"
 )
 
-// DefaultCapacity 是默认可保留的帧数（约 30 分钟 @60fps）。
-const DefaultCapacity = 108000
+const (
+	// DefaultCapacity 是默认可保留的帧数（约 30 分钟 @60fps）。
+	DefaultCapacity = 108000
+	// maxRawBytes 限制原始 Profiler 流在内存中的上限（1 GiB）。
+	maxRawBytes = 1 << 30
+)
 
 // Stats 是当前会话的聚合统计。
 type Stats struct {
@@ -32,12 +37,15 @@ type Stats struct {
 
 // Session 是一次采集会话，线程安全。
 type Session struct {
-	mu    sync.RWMutex
-	buf   []protocol.FrameData
-	hier  [][]protocol.SampleNode
-	head  int // 下一个写入位置
-	size  int // 当前存储帧数
-	total uint64
+	mu       sync.RWMutex
+	buf      []protocol.FrameData
+	hier     [][]protocol.SampleNode
+	raw      [][]byte
+	rawBytes int
+	header   []byte // 流头报文体，清空帧时保留，导出时补到原始流前面
+	head     int    // 下一个写入位置
+	size     int // 当前存储帧数
+	total    uint64
 }
 
 // NewSession 创建容量为 capacity 的会话；capacity <= 0 时使用 DefaultCapacity。
@@ -83,7 +91,7 @@ func (s *Session) Total() uint64 {
 	return s.total
 }
 
-// Clear 清空会话。
+// Clear 清空帧数据。原始 Profiler 流保留，避免丢掉流头后无法重新分析。
 func (s *Session) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,14 +101,34 @@ func (s *Session) Clear() {
 	}
 }
 
-// Replace 用 frames 覆盖当前会话。超出容量时保留末尾（最新）帧。
-func (s *Session) Replace(frames []protocol.FrameData) {
+// ClearAll 清空帧数据与原始 Profiler 流（重新连接时使用）。
+func (s *Session) ClearAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.head, s.size, s.total = 0, 0, 0
 	for i := range s.hier {
 		s.hier[i] = nil
 	}
+	s.raw, s.rawBytes = nil, 0
+	s.header = nil
+}
+
+// Replace 用 frames 覆盖当前会话。超出容量时保留末尾（最新）帧。
+func (s *Session) Replace(frames []protocol.FrameData) {
+	s.ReplaceDetail(frames, nil)
+}
+
+// ReplaceDetail 用帧数据及其 CPU Hierarchy 覆盖当前会话。
+// hierarchies 可比 frames 短；超出容量时与 frames 一并保留末尾。
+func (s *Session) ReplaceDetail(frames []protocol.FrameData, hierarchies [][]protocol.SampleNode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.head, s.size, s.total = 0, 0, 0
+	for i := range s.hier {
+		s.hier[i] = nil
+	}
+	s.raw, s.rawBytes = nil, 0
+	s.header = nil
 	if len(frames) == 0 {
 		return
 	}
@@ -110,6 +138,9 @@ func (s *Session) Replace(frames []protocol.FrameData) {
 	}
 	for i := start; i < len(frames); i++ {
 		s.buf[s.head] = frames[i]
+		if i < len(hierarchies) {
+			s.hier[s.head] = hierarchies[i]
+		}
 		s.head = (s.head + 1) % len(s.buf)
 		if s.size < len(s.buf) {
 			s.size++
@@ -166,6 +197,98 @@ func (s *Session) HierarchyAt(index int) ([]protocol.SampleNode, bool) {
 	out := make([]protocol.SampleNode, len(h))
 	copy(out, h)
 	return out, true
+}
+
+// Hierarchies 返回与 Range(0, Len()) 对齐的各帧 CPU Hierarchy。
+func (s *Session) Hierarchies() [][]protocol.SampleNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.size == 0 {
+		return nil
+	}
+	out := make([][]protocol.SampleNode, s.size)
+	start := s.head - s.size + len(s.buf)
+	for i := 0; i < s.size; i++ {
+		h := s.hier[(start+i)%len(s.buf)]
+		if len(h) == 0 {
+			continue
+		}
+		cp := make([]protocol.SampleNode, len(h))
+		copy(cp, h)
+		out[i] = cp
+	}
+	return out
+}
+
+// AppendRaw 追加一条原始 Profiler 报文体（流头或分块），供存档原样写出。
+func (s *Session) AppendRaw(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendRawLocked(body)
+}
+
+func (s *Session) appendRawLocked(body []byte) {
+	if isProfilerStreamHeader(body) {
+		s.header = make([]byte, len(body))
+		copy(s.header, body)
+	}
+	if s.rawBytes >= maxRawBytes {
+		return
+	}
+	if s.rawBytes+len(body) > maxRawBytes {
+		return
+	}
+	cp := make([]byte, len(body))
+	copy(cp, body)
+	s.raw = append(s.raw, cp)
+	s.rawBytes += len(cp)
+}
+
+// SetRaw 用原始 Profiler 流覆盖当前存档缓冲。
+func (s *Session) SetRaw(chunks [][]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raw, s.rawBytes, s.header = nil, 0, nil
+	for _, c := range chunks {
+		s.appendRawLocked(c)
+	}
+}
+
+// Raw 返回已保存的原始 Profiler 报文体（与接收顺序一致）。
+// 若会话期间确实收到过流头，导出时保证它位于分块列表开头；不会伪造流头。
+func (s *Session) Raw() [][]byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.raw) == 0 && len(s.header) == 0 {
+		return nil
+	}
+	if len(s.header) > 0 && (len(s.raw) == 0 || !isProfilerStreamHeader(s.raw[0])) {
+		out := make([][]byte, 0, len(s.raw)+1)
+		h := make([]byte, len(s.header))
+		copy(h, s.header)
+		out = append(out, h)
+		out = append(out, s.raw...)
+		return out
+	}
+	out := make([][]byte, len(s.raw))
+	copy(out, s.raw)
+	return out
+}
+
+// RawLen 返回已保存的原始分块数（含会话中实际收到的流头）。
+func (s *Session) RawLen() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := len(s.raw)
+	if len(s.header) > 0 && (n == 0 || !isProfilerStreamHeader(s.raw[0])) {
+		n++
+	}
+	return n
+}
+
+func isProfilerStreamHeader(b []byte) bool {
+	const pd3u = 0x55334450
+	return len(b) >= 4 && binary.LittleEndian.Uint32(b[:4]) == pd3u
 }
 
 // Latest 返回最近的 n 帧（按时间顺序）。

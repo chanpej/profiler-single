@@ -8,7 +8,6 @@ interface Props {
   frame: FrameData | null;
   selectedIndex: number;
   total: number;
-  sourceFile?: string;
   deepProfiling?: boolean;
   callStacks?: boolean;
   onClear: () => void;
@@ -26,16 +25,16 @@ interface Props {
 
 /** Unity Profiler 2022 风格顶栏：Record / Pause / Deep Profile / Call Stacks / Clear / Load / Save / 帧导航。 */
 export function ProfilerToolbar({
-  recording, connected, frame, selectedIndex, total, sourceFile,
+  recording, connected, frame, selectedIndex, total,
   deepProfiling = false, callStacks = false,
   onClear, onPrev, onNext, onSeek, onCurrent, onToggleRecord, onPause, onExport, onImport,
   onDeepProfiling, onCallStacks,
 }: Props) {
-  const atStart = selectedIndex <= 0 || total === 0;
-  const atEnd = selectedIndex >= total - 1 || total === 0;
+  const hasSelection = total > 0 && selectedIndex >= 0;
+  const atStart = !hasSelection || selectedIndex <= 0;
+  const atEnd = !hasSelection || selectedIndex >= total - 1;
   const paused = connected && !recording;
   const canCapture = connected;
-  const fileName = sourceFile ? sourceFile.replace(/^.*[\\/]/, '') : '';
 
   return (
     <div className="profiler-toolbar" role="toolbar" aria-label="Profiler 工具栏">
@@ -108,7 +107,7 @@ export function ProfilerToolbar({
       <input
         className="input profiler-frame-input"
         aria-label="当前帧"
-        value={total === 0 ? '' : String(selectedIndex)}
+        value={hasSelection ? String(selectedIndex) : ''}
         onChange={(e) => {
           const n = Number.parseInt(e.target.value, 10);
           if (Number.isInteger(n)) onSeek(n);
@@ -138,7 +137,6 @@ export function ProfilerToolbar({
           <MousePointerClick size={14} aria-hidden />
         </span>
       )}
-      {fileName ? <span className="dim profiler-file" title={sourceFile}>{fileName}</span> : null}
     </div>
   );
 }

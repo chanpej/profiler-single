@@ -32,7 +32,6 @@ interface Props {
   getHierarchy?: (index: number) => Promise<SampleNode[]>;
   recording: boolean;
   connected: boolean;
-  sourceFile?: string;
   deepProfiling?: boolean;
   callStacks?: boolean;
   onClear: () => void;
@@ -53,7 +52,7 @@ const initialVp: Viewport = {
 
 /** Unity Profiler 2022 主视图：实时滚动 / 暂停视野 / 滚轮缩放。 */
 export function ProfilerView({
-  frames, totalCount, fetchRange, getFrame, getHierarchy, recording, connected, sourceFile,
+  frames, totalCount, fetchRange, getFrame, getHierarchy, recording, connected,
   deepProfiling = false, callStacks = false,
   onClear, onToggleRecord, onPause, onExport, onImport, onDeepProfiling, onCallStacks,
 }: Props) {
@@ -95,7 +94,7 @@ export function ProfilerView({
   }, [frames, fetchRange, total, windowed.start, windowed.visible]);
 
   useEffect(() => {
-    if (total === 0) {
+    if (total === 0 || windowed.selected < 0) {
       setPicked(null);
       return;
     }
@@ -123,7 +122,7 @@ export function ProfilerView({
   }, [frames, getFrame, localSelected, slice, total, windowed.selected]);
 
   useEffect(() => {
-    if (total === 0) {
+    if (total === 0 || windowed.selected < 0) {
       setHierarchy([]);
       return;
     }
@@ -203,6 +202,7 @@ export function ProfilerView({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (windowed.selected < 0) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         apply(seekTo(windowed, total, windowed.selected - 1));
@@ -236,9 +236,8 @@ export function ProfilerView({
         recording={recording}
         connected={connected}
         frame={picked}
-        selectedIndex={total === 0 ? 0 : windowed.selected}
+        selectedIndex={total === 0 || windowed.selected < 0 ? -1 : windowed.selected}
         total={total}
-        sourceFile={sourceFile}
         onClear={onClear}
         onPrev={() => apply(seekTo(windowed, total, windowed.selected - 1))}
         onNext={() => apply(seekTo(windowed, total, windowed.selected + 1))}
@@ -258,6 +257,7 @@ export function ProfilerView({
         data-testid="profiler-viewport"
         data-start={windowed.start}
         data-visible={windowed.visible}
+        data-selected={windowed.selected}
         data-follow={windowed.follow ? 'true' : 'false'}
       />
       <div className="profiler-modules" role="group" aria-label="Profiler 模块">

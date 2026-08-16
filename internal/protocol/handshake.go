@@ -23,6 +23,8 @@ type Handshake struct {
 	AppVersion   string `json:"appVersion"`
 	// ProfilerStreamVersion 是 Player Profiler 数据流的格式版本，采集开始后才有值。
 	ProfilerStreamVersion uint32 `json:"profilerStreamVersion"`
+	// MainThreadID 是数据流头里的主线程 ID，打开无流头的存档时用来补全解码。
+	MainThreadID int64 `json:"mainThreadId,omitempty"`
 	// DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 引擎信息能力位。
 	DeepProfilerSupported      bool `json:"deepProfilerSupported"`
 	ManagedCallstacksSupported bool `json:"managedCallstacksSupported"`

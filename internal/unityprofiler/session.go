@@ -77,10 +77,19 @@ type Session struct {
 	done       chan struct{}
 	deep       bool
 	callStacks bool
+	onRaw      func([]byte)
 }
 
 // NewSession 创建未连接的会话。
 func NewSession() *Session { return &Session{} }
+
+// SetRawHandler 注册原始 Profiler 报文体回调。每条 MsgIDProfilerData 在解码前原样送达。
+// 回调不得重入本会话的锁。
+func (s *Session) SetRawHandler(fn func([]byte)) {
+	s.mu.Lock()
+	s.onRaw = fn
+	s.mu.Unlock()
+}
 
 // Connect 以 Editor Profiler 身份连到 Player 并开启采集。
 //
@@ -298,8 +307,18 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 
 	var loopErr error
 	checkedVersion := false
+	emitRaw := func(body []byte) {
+		s.mu.Lock()
+		onRaw := s.onRaw
+		s.mu.Unlock()
+		if onRaw != nil {
+			onRaw(body)
+		}
+	}
+
 	// 先补上握手期间到达的数据流报文，其中通常包含数据流头。
 	for _, body := range pending {
+		emitRaw(body)
 		s.mu.Lock()
 		_ = dec.Feed(body)
 		loopErr = s.checkStreamVersion(dec, &checkedVersion)
@@ -328,6 +347,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 		if msg.ID != MsgIDProfilerData {
 			continue
 		}
+		emitRaw(msg.Body)
 		s.mu.Lock()
 		// 单块出错不终止采集：Feed 内部已标记失步，后续块继续尝试。
 		_ = dec.Feed(msg.Body)
@@ -377,6 +397,7 @@ func (s *Session) checkStreamVersion(dec *Decoder, checked *bool) error {
 	}
 	*checked = true
 	s.handshake.ProfilerStreamVersion = h.FormatVersion
+	s.handshake.MainThreadID = h.MainThreadID
 	if h.EngineVersion != "" {
 		s.handshake.UnityVersion = h.EngineVersion
 	}

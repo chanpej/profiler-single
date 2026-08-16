@@ -64,9 +64,12 @@ describe('ProfilerToolbar', () => {
     expect(screen.getByRole('button', { name: '最新帧' })).toBeInTheDocument();
   });
 
-  it('显示已加载文件名', () => {
-    renderBar({ sourceFile: 'D:\\captures\\boss.upac' });
-    expect(screen.getByText('boss.upac')).toBeInTheDocument();
+  it('无选中帧时帧号为空且上一帧/下一帧不可用', () => {
+    renderBar({ selectedIndex: -1, total: 10, frame: null });
+    expect(screen.getByLabelText('当前帧')).toHaveValue('');
+    expect(screen.getByRole('button', { name: '上一帧' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '下一帧' })).toBeDisabled();
+    expect(screen.getByLabelText('无选中帧')).toBeInTheDocument();
   });
 
   it('Load 触发回调', async () => {

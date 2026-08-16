@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProfilerView } from './ProfilerView';
 import { emptyFrame } from '../lib/frame';
@@ -71,7 +71,8 @@ describe('ProfilerView', () => {
     await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
     expect(screen.getByLabelText('当前帧')).toHaveValue('1');
     await userEvent.click(screen.getByRole('button', { name: '最新帧' }));
-    expect(screen.getByLabelText('当前帧')).toHaveValue('2');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('');
+    expect(screen.getByText('选择一帧以查看详情')).toBeInTheDocument();
   });
 
   it('点击 Memory 模块后详情切换为 Simple 内存表', async () => {
@@ -144,12 +145,43 @@ describe('ProfilerView 时间轴视口', () => {
     expect(viewport()).toHaveAttribute('data-start', '100');
   });
 
-  it('Current 恢复实时跟随', async () => {
+  it('Current 恢复实时跟随并取消选中', async () => {
     renderView({ frames: many });
     await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
     await userEvent.click(screen.getByRole('button', { name: '最新帧' }));
     expect(viewport()).toHaveAttribute('data-follow', 'true');
-    expect(screen.getByLabelText('当前帧')).toHaveValue('399');
+    expect(viewport()).toHaveAttribute('data-selected', '-1');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('');
+    expect(screen.getByText('选择一帧以查看详情')).toBeInTheDocument();
+  });
+
+  it('跳到最新帧后帧数增长不再拉取详情', async () => {
+    const getHierarchy = vi.fn().mockResolvedValue([]);
+    const getFrame = vi.fn(async (i: number) => frameAt(i));
+    const fetchRange = vi.fn(async (offset: number, limit: number) =>
+      Array.from({ length: Math.min(limit, 400 - offset) }, (_, i) => frameAt(offset + i)),
+    );
+    const props: ComponentProps<typeof ProfilerView> = {
+      recording: true,
+      connected: true,
+      onClear: noop,
+      onToggleRecord: noop,
+      onPause: noop,
+      onExport: noop,
+      onImport: noop,
+      getFrame,
+      getHierarchy,
+      fetchRange,
+      totalCount: 10,
+    };
+    const { rerender } = render(<ProfilerView {...props} />);
+    await waitFor(() => expect(getHierarchy).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole('button', { name: '最新帧' }));
+    await waitFor(() => expect(screen.getByText('选择一帧以查看详情')).toBeInTheDocument());
+    const calls = getHierarchy.mock.calls.length;
+    rerender(<ProfilerView {...props} totalCount={20} />);
+    await waitFor(() => expect(viewport()).toHaveAttribute('data-selected', '-1'));
+    expect(getHierarchy.mock.calls.length).toBe(calls);
   });
 
   it('滚轮向下缩小（可见帧变多）且保持跟随', () => {

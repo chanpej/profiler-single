@@ -13,6 +13,17 @@ export interface AgentChunkEvent {
 }
 
 /**
+ * ImportProgressEvent 是加载存档时的解析进度。
+ */
+export interface ImportProgressEvent {
+    "phase": string;
+    "done": number;
+    "total": number;
+    "percent": number;
+    "fileName": string;
+}
+
+/**
  * Status 是连接状态快照。
  */
 export interface Status {
@@ -59,6 +70,11 @@ export interface Status {
      * 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
      */
     "lastError": string;
+
+    /**
+     * HasRaw 表示会话里有可导出的原始 Profiler 数据流。
+     */
+    "hasRaw": boolean;
 }
 
 /**

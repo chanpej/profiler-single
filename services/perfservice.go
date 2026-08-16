@@ -28,8 +28,13 @@ import (
 // TickEventName 是采集进度事件名，前端据此增量刷新。
 const TickEventName = "perf:tick"
 
+// ImportProgressEventName 是加载存档解析进度事件名。
+const ImportProgressEventName = "perf:import-progress"
+
 // AgentChunkEventName 是 ACP 聊天流式文本事件名。
 const AgentChunkEventName = "agent:chunk"
+
+const importProgressMinInterval = 80 * time.Millisecond
 
 const tickInterval = 250 * time.Millisecond
 
@@ -44,6 +49,15 @@ type TickEvent struct {
 // AgentChunkEvent 是 ACP Agent 流式回复的一段文本。
 type AgentChunkEvent struct {
 	Text string `json:"text"`
+}
+
+// ImportProgressEvent 是加载存档时的解析进度。
+type ImportProgressEvent struct {
+	Phase    string `json:"phase"`
+	Done     int    `json:"done"`
+	Total    int    `json:"total"`
+	Percent  int    `json:"percent"`
+	FileName string `json:"fileName"`
 }
 
 // Status 是连接状态快照。
@@ -70,6 +84,8 @@ type Status struct {
 	// LastError 是最近一次采集异常中断的原因；正常断开或未出错时为空。
 	// 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
 	LastError string `json:"lastError"`
+	// HasRaw 表示会话里有可导出的原始 Profiler 数据流。
+	HasRaw bool `json:"hasRaw"`
 }
 
 // PerfService 是性能采集与分析的门面，供前端调用。
@@ -85,6 +101,7 @@ type PerfService struct {
 	logger     *log.Logger
 	logFile    *os.File
 	recording  bool
+	captureRaw bool
 	sourceFile string
 	loadedHS   protocol.Handshake
 	deep       bool
@@ -104,10 +121,12 @@ func NewPerfService() *PerfService {
 		session:   collector.NewSession(0),
 		adbRun:    adbforward.DefaultRun,
 		emit:      func(string, any) {},
-		recording: true,
-		tickReq:   make(chan struct{}, 1),
-		stopUI:    make(chan struct{}),
+		recording:  true,
+		captureRaw: true,
+		tickReq:    make(chan struct{}, 1),
+		stopUI:     make(chan struct{}),
 	}
+	p.client.SetRawHandler(p.onRaw)
 	go p.uiLoop()
 	return p
 }
@@ -261,9 +280,10 @@ func (p *PerfService) connectTCP(host string, port int, transport string) (proto
 		p.mu.Unlock()
 		return protocol.Handshake{}, errors.New("已有连接，请先断开")
 	}
-	p.session.Clear()
+	p.session.ClearAll()
 	p.transport = transport
 	p.recording = true
+	p.captureRaw = true
 	p.sourceFile = ""
 	p.loadedHS = protocol.Handshake{}
 	p.lastErr = ""
@@ -346,6 +366,7 @@ func (p *PerfService) Status() Status {
 		DeepProfilerSupported:      hs.DeepProfilerSupported,
 		ManagedCallstacksSupported: hs.ManagedCallstacksSupported,
 		LastError:                  lastErr,
+		HasRaw:                     p.session.RawLen() > 0,
 	}
 }
 
@@ -374,10 +395,12 @@ func (p *PerfService) Stats() collector.Stats {
 }
 
 func (p *PerfService) Clear() {
+	connected := p.client.Connected()
 	p.session.Clear()
 	p.mu.Lock()
 	p.sourceFile = ""
 	p.loadedHS = protocol.Handshake{}
+	p.captureRaw = connected
 	p.mu.Unlock()
 	p.notifyUI()
 }
@@ -432,7 +455,7 @@ func (p *PerfService) FrameHierarchy(index int) []protocol.SampleNode {
 	return h
 }
 
-// ExportCapture 将当前会话导出为紧凑二进制 .upac 文件。
+// ExportCapture 将当前会话的原始 Profiler 数据流导出为 .upac 文件。
 func (p *PerfService) ExportCapture(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -444,37 +467,58 @@ func (p *PerfService) ExportCapture(path string) error {
 		hs = p.loadedHS
 	}
 	p.mu.Unlock()
-	frames := p.session.Range(0, p.session.Len())
-	if len(frames) == 0 {
-		return errors.New("没有可导出的帧数据")
+	raw := p.session.Raw()
+	if len(raw) == 0 {
+		return errors.New("没有可导出的原始 Profiler 数据")
 	}
-	if err := capture.SaveFile(path, capture.File{Handshake: hs, Frames: frames}); err != nil {
-		return err
+	if err := capture.SaveFile(path, capture.File{Handshake: hs, Raw: raw}); err != nil {
+		return fmt.Errorf("无法保存存档：%w", err)
 	}
-	p.logf("已导出 %d 帧 -> %s", len(frames), path)
+	p.logf("已导出 %d 个原始数据块 -> %s", len(raw), path)
 	return nil
 }
 
-// ImportCapture 加载紧凑二进制存档并替换当前会话数据。
+// ImportCapture 加载存档并按当前解码器重新分析。
+// v2 文件重放原始 Profiler 流；v1 旧文件仅还原已解码帧（无 Hierarchy）。
 // 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
 func (p *PerfService) ImportCapture(path string) (int, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return 0, errors.New("加载路径为空")
 	}
+	fileName := filepath.Base(path)
+	last := time.Time{}
+	p.emitImportProgress(fileName, "read", 0, 1, true, &last)
 	file, err := capture.LoadFile(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("无法读取存档：%w", err)
 	}
-	p.session.Replace(file.Frames)
+	if len(file.Raw) > 0 {
+		frames, hiers, err := unityprofiler.ReplayWithProgress(file.Raw, func(done, total int) {
+			p.emitImportProgress(fileName, "parse", done, total, false, &last)
+		})
+		if err != nil {
+			return 0, fmt.Errorf("解析存档失败：%w", err)
+		}
+		p.emitImportProgress(fileName, "parse", len(file.Raw), len(file.Raw), true, &last)
+		p.session.ReplaceDetail(frames, hiers)
+		p.session.SetRaw(file.Raw)
+	} else if len(file.Frames) > 0 {
+		p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
+		p.session.Replace(file.Frames)
+	} else {
+		return 0, errors.New("存档没有可解析的 Profiler 数据")
+	}
+	connected := p.client.Connected()
 	p.mu.Lock()
 	p.sourceFile = path
 	p.loadedHS = file.Handshake
-	if p.connectedLocked() {
+	p.captureRaw = false
+	if connected {
 		p.recording = false
 	}
 	p.mu.Unlock()
-	p.logf("已加载 %d 帧 <- %s", len(file.Frames), path)
+	p.logf("已加载 %d 帧 <- %s", p.session.Len(), path)
 	p.notifyUI()
 	return p.session.Len(), nil
 }
@@ -609,11 +653,21 @@ func (p *PerfService) onFrame(f protocol.FrameData, hierarchy []protocol.SampleN
 	p.notifyUI()
 }
 
+func (p *PerfService) onRaw(body []byte) {
+	p.mu.Lock()
+	capture := p.captureRaw
+	p.mu.Unlock()
+	if !capture {
+		return
+	}
+	p.session.AppendRaw(body)
+}
+
 func (p *PerfService) onClosed(err error) {
 	p.mu.Lock()
 	p.lastErr = ""
 	if err != nil {
-		p.lastErr = err.Error()
+		p.lastErr = strings.TrimPrefix(err.Error(), "unityprofiler: ")
 	}
 	p.mu.Unlock()
 	if err != nil {
@@ -622,6 +676,50 @@ func (p *PerfService) onClosed(err error) {
 		p.logf("采集连接关闭")
 	}
 	p.notifyUI()
+}
+
+func importPercent(done, total int) int {
+	if total <= 0 {
+		if done > 0 {
+			return 100
+		}
+		return 0
+	}
+	p := done * 100 / total
+	if p < 0 {
+		return 0
+	}
+	if p > 100 {
+		return 100
+	}
+	return p
+}
+
+func (p *PerfService) emitImportProgress(fileName, phase string, done, total int, force bool, last *time.Time) {
+	now := time.Now()
+	if !force && last != nil && !last.IsZero() && now.Sub(*last) < importProgressMinInterval {
+		return
+	}
+	if last != nil {
+		*last = now
+	}
+	percent := 0
+	if phase != "read" {
+		percent = importPercent(done, total)
+	}
+	ev := ImportProgressEvent{
+		Phase:    phase,
+		Done:     done,
+		Total:    total,
+		Percent:  percent,
+		FileName: fileName,
+	}
+	p.mu.Lock()
+	emit := p.emit
+	p.mu.Unlock()
+	if emit != nil {
+		emit(ImportProgressEventName, ev)
+	}
 }
 
 // notifyUI 请求刷新界面；通道满即丢弃（合并为一次刷新），永不阻塞调用方。

@@ -129,6 +129,8 @@ export interface Status {
   managedCallstacksSupported?: boolean;
   /** 最近一次采集异常中断的原因；正常断开时为空。 */
   lastError?: string;
+  /** 会话里是否有可导出的原始 Profiler 数据流。 */
+  hasRaw?: boolean;
 }
 
 export interface AgentProfile {
@@ -160,6 +162,14 @@ export interface TickEvent {
   retained: number;
   connected: boolean;
   recording?: boolean;
+}
+
+export interface ImportProgressEvent {
+  phase: 'read' | 'parse' | string;
+  done: number;
+  total: number;
+  percent: number;
+  fileName: string;
 }
 
 export interface AgentModelOption {

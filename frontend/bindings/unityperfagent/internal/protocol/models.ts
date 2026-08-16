@@ -74,6 +74,11 @@ export interface Handshake {
     "profilerStreamVersion": number;
 
     /**
+     * MainThreadID 是数据流头里的主线程 ID，打开无流头的存档时用来补全解码。
+     */
+    "mainThreadId"?: number;
+
+    /**
      * DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 引擎信息能力位。
      */
     "deepProfilerSupported": boolean;

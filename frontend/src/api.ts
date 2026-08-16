@@ -2,7 +2,7 @@
 // 绑定层的 Go 切片可能为 null，这里统一归一化为空数组。
 import { Events } from '@wailsio/runtime';
 import * as PerfService from '../bindings/unityperfagent/services/perfservice.js';
-import type { AgentModelOption, FrameData, Handshake, LLMConfig, ProbeResult, Report, SampleNode, Stats, Status, TickEvent } from './types';
+import type { AgentModelOption, FrameData, Handshake, ImportProgressEvent, LLMConfig, ProbeResult, Report, SampleNode, Stats, Status, TickEvent } from './types';
 import { normalizeSampleTree } from './lib/sample';
 import { normalizeLLMConfig } from './lib/llmConfig';
 
@@ -69,6 +69,8 @@ export const api = {
   agentChatClose: (): Promise<void> => PerfService.AgentChatClose(),
   onTick: (handler: (ev: TickEvent) => void): (() => void) =>
     Events.On('perf:tick', (ev: { data: TickEvent }) => handler(ev.data)),
+  onImportProgress: (handler: (ev: ImportProgressEvent) => void): (() => void) =>
+    Events.On('perf:import-progress', (ev: { data: ImportProgressEvent }) => handler(ev.data)),
   onAgentChunk: (handler: (text: string) => void): (() => void) =>
     Events.On('agent:chunk', (ev: { data: { text: string } }) => handler(ev.data?.text ?? '')),
 };

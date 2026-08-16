@@ -13,6 +13,7 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "agent:chunk": services$0.AgentChunkEvent;
+            "perf:import-progress": services$0.ImportProgressEvent;
             "perf:tick": services$0.TickEvent;
         }
     }

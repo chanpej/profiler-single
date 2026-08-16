@@ -15,6 +15,7 @@ var assets embed.FS
 func init() {
 	// 注册事件类型，绑定生成器会为前端生成强类型 API。
 	application.RegisterEvent[services.TickEvent](services.TickEventName)
+	application.RegisterEvent[services.ImportProgressEvent](services.ImportProgressEventName)
 	application.RegisterEvent[services.AgentChunkEvent](services.AgentChunkEventName)
 }
 

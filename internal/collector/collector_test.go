@@ -275,3 +275,116 @@ func TestHierarchyAt(t *testing.T) {
 		t.Fatal("cleared session should miss")
 	}
 }
+
+func TestReplaceClearsHierarchy(t *testing.T) {
+	s := NewSession(8)
+	s.AppendDetail(frameN(99), []protocol.SampleNode{{Name: "Main Thread"}})
+	s.Replace([]protocol.FrameData{frameN(1)})
+	h, ok := s.HierarchyAt(0)
+	if !ok || h != nil {
+		t.Fatalf("Replace should drop hierarchy: %v ok=%v", h, ok)
+	}
+}
+
+func TestReplaceDetailRestoresHierarchy(t *testing.T) {
+	s := NewSession(8)
+	s.Append(frameN(99))
+	frames := []protocol.FrameData{frameN(1), frameN(2)}
+	hiers := [][]protocol.SampleNode{
+		{{Name: "Main Thread", TotalMs: 16, Children: []protocol.SampleNode{{Name: "Update", TotalMs: 4}}}},
+		nil,
+	}
+	s.ReplaceDetail(frames, hiers)
+	if s.Len() != 2 {
+		t.Fatalf("len=%d", s.Len())
+	}
+	h, ok := s.HierarchyAt(0)
+	if !ok || len(h) != 1 || h[0].Name != "Main Thread" || len(h[0].Children) != 1 || h[0].Children[0].Name != "Update" {
+		t.Fatalf("HierarchyAt(0)=%v ok=%v", h, ok)
+	}
+	h, ok = s.HierarchyAt(1)
+	if !ok || h != nil {
+		t.Fatalf("frame without hierarchy: %v ok=%v", h, ok)
+	}
+	got := s.Hierarchies()
+	if len(got) != 2 || got[0][0].Name != "Main Thread" || got[1] != nil {
+		t.Fatalf("Hierarchies=%v", got)
+	}
+}
+
+func TestReplaceDetailOverflowKeepsLatestHierarchy(t *testing.T) {
+	s := NewSession(2)
+	frames := []protocol.FrameData{frameN(0), frameN(1), frameN(2)}
+	hiers := [][]protocol.SampleNode{
+		{{Name: "A"}},
+		{{Name: "B"}},
+		{{Name: "C"}},
+	}
+	s.ReplaceDetail(frames, hiers)
+	h, _ := s.HierarchyAt(0)
+	if len(h) != 1 || h[0].Name != "B" {
+		t.Fatalf("oldest kept hierarchy = %v, want B", h)
+	}
+	h, _ = s.HierarchyAt(1)
+	if len(h) != 1 || h[0].Name != "C" {
+		t.Fatalf("latest hierarchy = %v, want C", h)
+	}
+}
+
+func TestHierarchiesEmpty(t *testing.T) {
+	s := NewSession(4)
+	if s.Hierarchies() != nil {
+		t.Fatal("empty session should return nil hierarchies")
+	}
+	s.Append(frameN(1))
+	got := s.Hierarchies()
+	if len(got) != 1 || got[0] != nil {
+		t.Fatalf("frame without tree: %v", got)
+	}
+}
+
+func TestRawRoundTrip(t *testing.T) {
+	s := NewSession(4)
+	a := []byte{1, 2, 3}
+	b := []byte{4, 5}
+	s.AppendRaw(a)
+	s.AppendRaw(b)
+	got := s.Raw()
+	if len(got) != 2 || !bytesEqual(got[0], a) || !bytesEqual(got[1], b) {
+		t.Fatalf("Raw = %v", got)
+	}
+	a[0] = 9
+	if got[0][0] != 1 {
+		t.Fatal("AppendRaw should copy")
+	}
+	s.Clear()
+	if s.Raw() == nil {
+		t.Fatal("Clear should keep raw stream")
+	}
+	s.ClearAll()
+	if s.Raw() != nil {
+		t.Fatal("ClearAll should drop raw")
+	}
+	s.AppendRaw([]byte{1})
+	s.Replace([]protocol.FrameData{frameN(1)})
+	if s.Raw() != nil {
+		t.Fatal("Replace should drop raw")
+	}
+	s.SetRaw([][]byte{{9, 8}, {7}})
+	got = s.Raw()
+	if len(got) != 2 || got[0][0] != 9 || got[1][0] != 7 {
+		t.Fatalf("SetRaw = %v", got)
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

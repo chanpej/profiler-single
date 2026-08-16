@@ -9,11 +9,13 @@ import { loadAgentCollapsed, loadAgentWidth, saveAgentCollapsed } from './lib/ag
 import { applyChatFontSize, loadChatFontSize } from './lib/chatAppearance';
 import { emptyLLMConfig, isAgentConfigured, normalizeLLMConfig, updateAgent, withActiveAgent } from './lib/llmConfig';
 import { applyLLMRuntime, loadLLMRuntime, saveLLMRuntime } from './lib/llmRuntimeStorage';
-import type { AgentProfile, LLMConfig, OverlayId, Stats, Status } from './types';
+import { initialImportProgress } from './lib/importProgress';
+import type { AgentProfile, ImportProgressEvent, LLMConfig, OverlayId, Stats, Status } from './types';
 import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
 import { AppDialog } from './components/AppDialog';
 import { ErrorPopup } from './components/ErrorPopup';
+import { ProgressPopup } from './components/ProgressPopup';
 import { ConnectBar } from './components/ConnectBar';
 import { FrameTable } from './components/FrameTable';
 import { AnalysisView } from './components/AnalysisView';
@@ -53,12 +55,14 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [packageId, setPackageId] = useState(loadPackageId);
   const [error, setError] = useState('');
+  const [importProgress, setImportProgress] = useState<ImportProgressEvent | null>(null);
   const [llm, setLlm] = useState<LLMConfig>(() => applyLLMRuntime(emptyLLMConfig, loadLLMRuntime()));
   const [agentCollapsed, setAgentCollapsed] = useState(loadAgentCollapsed);
   const [agentWidth, setAgentWidth] = useState(loadAgentWidth);
   const lastRefresh = useRef(0);
   const statusRef = useRef(status);
   const shownLastError = useRef('');
+  const importing = useRef(false);
   statusRef.current = status;
 
   const refresh = useCallback(async () => {
@@ -76,7 +80,7 @@ function App() {
       saveLLMRuntime(next);
       await api.setLLMConfig(next);
     }).catch(() => {});
-    const off = api.onTick(() => {
+    const offTick = api.onTick(() => {
       const now = Date.now();
       const live = statusRef.current.connected && statusRef.current.recording !== false;
       const interval = live ? LIVE_REFRESH_MS : IDLE_REFRESH_MS;
@@ -84,7 +88,13 @@ function App() {
       lastRefresh.current = now;
       refresh().catch(() => {});
     });
-    return off;
+    const offImport = api.onImportProgress((ev) => {
+      if (importing.current) setImportProgress(ev);
+    });
+    return () => {
+      offTick();
+      offImport();
+    };
   }, [refresh]);
 
   useEffect(() => {
@@ -169,7 +179,14 @@ function App() {
   const onImport = () => guard(async () => {
     const path = await captureDialogs.open();
     if (!path) return;
-    await api.importCapture(path);
+    importing.current = true;
+    setImportProgress(initialImportProgress(path));
+    try {
+      await api.importCapture(path);
+    } finally {
+      importing.current = false;
+      setImportProgress(null);
+    }
   });
   const onClear = () => guard(() => api.clear());
   const onDeepProfiling = (on: boolean) => {
@@ -179,17 +196,13 @@ function App() {
     guard(() => api.setCallStacks(on));
   };
 
-  const fileName = (status.sourceFile ?? '').replace(/^.*[\\/]/, '');
   const llmReady = isAgentConfigured(llm);
 
   return (
     <div className="app">
-      <TitleBar
-        subtitle={fileName}
-        controls={windowControls}
-      />
+      <TitleBar controls={windowControls} />
       <MenuBar
-        canSave={status.retained > 0}
+        canSave={!!status.hasRaw}
         onImport={onImport}
         onExport={onExport}
         onClear={onClear}
@@ -218,7 +231,6 @@ function App() {
             getHierarchy={getHierarchy}
             recording={recording}
             connected={status.connected}
-            sourceFile={status.sourceFile}
             deepProfiling={status.deepProfiling === true}
             callStacks={status.callStacks === true}
             onClear={onClear}
@@ -246,6 +258,7 @@ function App() {
       <StatusBar status={status} busy={busy} agentName={llmReady ? (llm.agents.find((a) => a.id === llm.activeId)?.name ?? '') : ''} />
 
       <ErrorPopup message={error} open={error !== ''} onClose={() => setError('')} />
+      <ProgressPopup progress={importProgress} />
 
       <AppDialog
         title={overlay ? overlayTitle[overlay] : ''}

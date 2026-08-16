@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"unityperfagent/internal/protocol"
+	"unityperfagent/internal/unityprofiler"
 )
 
 func sampleFrame(i int) protocol.FrameData {
@@ -163,5 +164,47 @@ func TestCompactVsJSON(t *testing.T) {
 	// 1000 帧应远小于同等 JSON（每帧 JSON 约 600B+）。
 	if buf.Len() > 1000*protocol.FramePayloadSize+headerSize {
 		t.Fatalf("not compact: %d", buf.Len())
+	}
+}
+
+func TestEncodeDecodeRawRoundTrip(t *testing.T) {
+	in := File{
+		Handshake: protocol.Handshake{DeviceName: "Pixel 7", UnityVersion: "2022.3.47f1"},
+		Raw:       unityprofiler.SampleProfilerCapture(),
+	}
+	var buf bytes.Buffer
+	if err := Encode(&buf, in); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := Decode(&buf)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got.Handshake.DeviceName != "Pixel 7" || got.Handshake.UnityVersion != "2022.3.47f1" {
+		t.Fatalf("handshake = %+v", got.Handshake)
+	}
+	if len(got.Frames) != 0 {
+		t.Fatalf("raw archive should not store processed frames, got %d", len(got.Frames))
+	}
+	if len(got.Raw) != len(in.Raw) {
+		t.Fatalf("raw chunks = %d, want %d", len(got.Raw), len(in.Raw))
+	}
+	for i := range in.Raw {
+		if !bytes.Equal(got.Raw[i], in.Raw[i]) {
+			t.Fatalf("chunk %d mismatch", i)
+		}
+	}
+}
+
+func TestDecodeTruncatedRawChunk(t *testing.T) {
+	in := File{Raw: unityprofiler.SampleProfilerCapture()}
+	var buf bytes.Buffer
+	if err := Encode(&buf, in); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.Bytes()[:buf.Len()-8]
+	_, err := Decode(bytes.NewReader(raw))
+	if err == nil {
+		t.Fatal("expected truncated raw error")
 	}
 }
