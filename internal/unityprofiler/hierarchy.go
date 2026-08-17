@@ -26,9 +26,9 @@ func cloneValues(in []value) []value {
 	return out
 }
 
-func buildHierarchy(d *Decoder, roots []*treeNode) []protocol.SampleNode {
-	nodes := treeToSamples(d, roots)
-	nodes = mergeSampleNodes(nodes)
+func buildHierarchy(d *Decoder, roots []*treeNode, originNS int64) []protocol.SampleNode {
+	nodes := treeToSamples(d, roots, originNS)
+	// Timeline 需要未合并的时序实例；Hierarchy 页签在前端再按名字合并。
 	// 先把分配量上浮，再裁剪：这样即使子树因预算被砍掉，父行仍显示完整分配量，
 	// 不会出现"父行 0 KB、展开后才冒出分配"的假象。
 	rollUpGCAlloc(nodes)
@@ -49,7 +49,7 @@ func rollUpGCAlloc(nodes []protocol.SampleNode) float32 {
 	return sum
 }
 
-func treeToSamples(d *Decoder, nodes []*treeNode) []protocol.SampleNode {
+func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.SampleNode {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -65,8 +65,9 @@ func treeToSamples(d *Decoder, nodes []*treeNode) []protocol.SampleNode {
 			Category: cat,
 			TotalMs:  float32(float64(n.totalNS) / nsPerMSHierarchy),
 			SelfMs:   float32(float64(n.selfNS) / nsPerMSHierarchy),
+			StartMs:  startMsFromOrigin(n.startNS, originNS),
 			Calls:    1,
-			Children: treeToSamples(d, n.kids),
+			Children: treeToSamples(d, n.kids, originNS),
 		}
 		for _, v := range n.meta {
 			switch v.Type {
@@ -101,6 +102,13 @@ func resolveCallstack(d *Decoder, addrs []uint64) []string {
 	return out
 }
 
+func startMsFromOrigin(startNS, originNS int64) float32 {
+	if originNS == 0 && startNS == 0 {
+		return 0
+	}
+	return float32(float64(startNS-originNS) / nsPerMSHierarchy)
+}
+
 func mergeSampleNodes(nodes []protocol.SampleNode) []protocol.SampleNode {
 	if len(nodes) == 0 {
 		return nil
@@ -125,6 +133,9 @@ func mergeSampleNodes(nodes []protocol.SampleNode) []protocol.SampleNode {
 			a.node.SelfMs += n.SelfMs
 			a.node.Calls += n.Calls
 			a.node.GCAllocKB += n.GCAllocKB
+			if n.StartMs < a.node.StartMs {
+				a.node.StartMs = n.StartMs
+			}
 			if len(a.node.Callstack) == 0 && len(n.Callstack) > 0 {
 				a.node.Callstack = n.Callstack
 			}

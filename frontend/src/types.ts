@@ -49,6 +49,8 @@ export interface SampleNode {
   selfMs: number;
   calls: number;
   gcAllocKB: number;
+  /** 相对本帧起点的开始时间（ms），Timeline 用；缺省时按子节点顺序排布。 */
+  startMs?: number;
   callstack?: string[];
   children?: SampleNode[];
 }

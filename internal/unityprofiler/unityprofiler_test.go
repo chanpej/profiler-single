@@ -647,6 +647,62 @@ func TestDecoderBuildsHierarchyAndCallstack(t *testing.T) {
 	}
 }
 
+// Timeline 必须保留每次采样的开始时间，且不能把同名兄弟合并成一条，否则无法按 Unity 那样沿时间轴摆放。
+func TestDecoderKeepsTimelineStartTimes(t *testing.T) {
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(EncodeStreamHeader(StreamHeader{
+		FormatVersion: Unity2022StreamVersion, MainThreadID: captureMainThreadID,
+	}, 2022, 3, 47, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catScripts, "Scripts")
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkScripts, 0, catScripts, "BehaviourUpdate")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	const ns = int64(1_000_000)
+	var ev RecordWriter
+	ev.FrameBoundary(1, 0)
+	ev.Begin(mkMainThread, 0)
+	ev.Begin(mkScripts, 2*ns)
+	ev.End(mkScripts, 5*ns)
+	ev.Begin(mkScripts, 6*ns)
+	ev.End(mkScripts, 8*ns)
+	ev.End(mkMainThread, 10*ns)
+	ev.FrameBoundary(2, 10*ns)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if snap == nil {
+		t.Fatal("未解出帧")
+	}
+	root := findSample(snap.Hierarchy, "Main Thread")
+	if root == nil {
+		t.Fatalf("缺少 Main Thread: %+v", snap.Hierarchy)
+	}
+	if math.Abs(float64(root.StartMs)) > 0.001 || math.Abs(float64(root.TotalMs)-10) > 0.001 {
+		t.Fatalf("Main Thread start=%v total=%v", root.StartMs, root.TotalMs)
+	}
+	kids := root.Children
+	if len(kids) != 2 {
+		t.Fatalf("同名采样应保留两次实例，实际 %d: %+v", len(kids), kids)
+	}
+	if kids[0].Name != "BehaviourUpdate" || kids[1].Name != "BehaviourUpdate" {
+		t.Fatalf("children=%+v", kids)
+	}
+	if math.Abs(float64(kids[0].StartMs)-2) > 0.001 || math.Abs(float64(kids[0].TotalMs)-3) > 0.001 {
+		t.Fatalf("第一次 BehaviourUpdate = %+v", kids[0])
+	}
+	if math.Abs(float64(kids[1].StartMs)-6) > 0.001 || math.Abs(float64(kids[1].TotalMs)-2) > 0.001 {
+		t.Fatalf("第二次 BehaviourUpdate = %+v", kids[1])
+	}
+}
+
 // 用真机字节验证 Call Stacks：调用栈记录（0x03 后跟 0x00）与"3 个元数据取值"
 // 记录（同为 0x03）撞号，必须各自解对，否则事件流会失步、整条流不再出帧。
 func TestDecodeCaptureCallstack(t *testing.T) {

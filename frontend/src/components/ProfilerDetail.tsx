@@ -3,8 +3,9 @@ import { ClipboardCopy } from 'lucide-react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
 import { memorySimpleRows, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
 import { formatCount, formatFps, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
-import { categoryColor, flattenVisible, mergeExpanded } from '../lib/hierarchy';
+import { categoryColor, flattenVisible, mergeExpanded, mergeSampleNodes } from '../lib/hierarchy';
 import { copyText } from '../lib/agentChatUi';
+import { CpuTimeline } from './CpuTimeline';
 import {
   callstackRatioFromPointer,
   loadCallstackRatio,
@@ -53,7 +54,7 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
         {!frame ? (
           <p className="dim">选择一帧以查看详情</p>
         ) : moduleId === 'cpu' && cpuTab === 'timeline' ? (
-          <CpuTimeline frame={frame} />
+          <CpuTimeline frame={frame} hierarchy={hierarchy} />
         ) : moduleId === 'cpu' && cpuTab === 'hierarchy' && hierarchy.length > 0 ? (
           <SampleHierarchy nodes={hierarchy} callStacks={callStacks} />
         ) : moduleId === 'memory' && memTab === 'detailed' ? (
@@ -104,9 +105,10 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
 }
 
 function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStacks: boolean }) {
+  const merged = useMemo(() => mergeSampleNodes(nodes), [nodes]);
   const touched = useRef(new Set<string>());
   const expandOpts = { revealCallstacks: callStacks };
-  const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), nodes, touched.current, expandOpts));
+  const [expanded, setExpanded] = useState(() => mergeExpanded(new Set(), merged, touched.current, expandOpts));
   const [selected, setSelected] = useState<string>('');
   const [overviewW, setOverviewW] = useState(loadOverviewWidth);
   const [callstackRatio, setCallstackRatio] = useState(loadCallstackRatio);
@@ -119,10 +121,10 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
   callstackRatioRef.current = callstackRatio;
 
   const visibleExpanded = useMemo(
-    () => mergeExpanded(expanded, nodes, touched.current, { revealCallstacks: callStacks }),
-    [expanded, nodes, callStacks],
+    () => mergeExpanded(expanded, merged, touched.current, { revealCallstacks: callStacks }),
+    [expanded, merged, callStacks],
   );
-  const rows = useMemo(() => flattenVisible(nodes, visibleExpanded), [nodes, visibleExpanded]);
+  const rows = useMemo(() => flattenVisible(merged, visibleExpanded), [merged, visibleExpanded]);
   const metricValues = useMemo(
     () => rows.map((r) => [
       formatMs(r.node.totalMs),
@@ -247,7 +249,7 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
                             e.stopPropagation();
                             touched.current.add(r.path);
                             setExpanded((cur) => {
-                              const next = new Set(mergeExpanded(cur, nodes, touched.current, { revealCallstacks: callStacks }));
+                              const next = new Set(mergeExpanded(cur, merged, touched.current, { revealCallstacks: callStacks }));
                               if (next.has(r.path)) next.delete(r.path);
                               else next.add(r.path);
                               return next;
@@ -398,35 +400,5 @@ function CounterTable({ rows }: { rows: { label: string; value: string }[] }) {
         ))}
       </tbody>
     </table>
-  );
-}
-
-function CpuTimeline({ frame }: { frame: FrameData }) {
-  const cats = moduleBreakdown(moduleById('cpu'), frame);
-  const total = cats.reduce((s, c) => s + c.value, 0) || 1;
-  return (
-    <div className="cpu-timeline" data-testid="cpu-timeline">
-      <div className="cpu-timeline-row">
-        <span className="cpu-timeline-label">Main Thread</span>
-        <div className="cpu-timeline-bar" role="img" aria-label="Main Thread 时间线">
-          {cats.map((c) => (
-            <span
-              key={c.id}
-              className="cpu-timeline-seg"
-              style={{ width: `${(c.value / total) * 100}%`, background: c.color }}
-              title={`${c.label} ${formatMs(c.value)}`}
-            />
-          ))}
-        </div>
-        <span className="mono dim">{formatMs(frame.mainThreadMs)}</span>
-      </div>
-      <div className="cpu-timeline-row">
-        <span className="cpu-timeline-label">Render Thread</span>
-        <div className="cpu-timeline-bar">
-          <span className="cpu-timeline-seg" style={{ width: '100%', background: '#2E8B4A' }} title={`Render ${formatMs(frame.renderMs)}`} />
-        </div>
-        <span className="mono dim">{formatMs(frame.renderMs)}</span>
-      </div>
-    </div>
   );
 }

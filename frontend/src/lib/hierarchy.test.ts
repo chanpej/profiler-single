@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callstackPaths, categoryColor, defaultExpanded, flattenVisible, mergeExpanded } from './hierarchy';
+import { callstackPaths, categoryColor, defaultExpanded, flattenVisible, mergeExpanded, mergeSampleNodes } from './hierarchy';
 import type { SampleNode } from '../types';
 
 const tree: SampleNode[] = [
@@ -85,5 +85,20 @@ describe('hierarchy', () => {
   it('分类颜色', () => {
     expect(categoryColor('Scripts')).toBe('#3B6CB5');
     expect(categoryColor('Unknown')).toBe('#5D6D7E');
+  });
+
+  it('按名字合并同名兄弟并累加 Calls / Total', () => {
+    const got = mergeSampleNodes([
+      { name: 'Update', category: 'Scripts', totalMs: 1, selfMs: 0.5, calls: 1, gcAllocKB: 0, startMs: 4 },
+      { name: 'Update', category: 'Scripts', totalMs: 2, selfMs: 1, calls: 1, gcAllocKB: 1, startMs: 1, callstack: ['A'] },
+      { name: 'LateUpdate', category: 'Scripts', totalMs: 0.4, selfMs: 0.4, calls: 1, gcAllocKB: 0, startMs: 8 },
+    ]);
+    expect(got).toHaveLength(2);
+    expect(got[0].name).toBe('Update');
+    expect(got[0].calls).toBe(2);
+    expect(got[0].totalMs).toBe(3);
+    expect(got[0].startMs).toBe(1);
+    expect(got[0].callstack).toEqual(['A']);
+    expect(got[1].name).toBe('LateUpdate');
   });
 });

@@ -388,6 +388,7 @@ type sampleEntry struct {
 // treeNode 是一帧主线程采样树中的一个节点（尚未合并同名兄弟）。
 type treeNode struct {
 	markerID  uint32
+	startNS   int64
 	totalNS   int64
 	selfNS    int64
 	kids      []*treeNode
@@ -763,7 +764,7 @@ func (d *Decoder) closeSample(st *threadStream, endNS int64) {
 	if self < 0 {
 		self = 0
 	}
-	node := &treeNode{markerID: top.markerID, totalNS: dur, selfNS: self,
+	node := &treeNode{markerID: top.markerID, startNS: top.startNS, totalNS: dur, selfNS: self,
 		kids: top.kids, meta: top.meta, callstack: top.callstack}
 	if len(st.stack) > 0 {
 		parent := &st.stack[len(st.stack)-1]
@@ -808,7 +809,7 @@ func (a *frameAccum) emit(d *Decoder, endNS int64) {
 		RootNS:     a.rootNS,
 		CategoryNS: make(map[string]int64, len(a.categoryNS)),
 		Counters:   make(map[string]float64, len(a.counters)),
-		Hierarchy:  buildHierarchy(d, a.roots),
+		Hierarchy:  buildHierarchy(d, a.roots, a.startNS),
 	}
 	for cat, ns := range a.categoryNS {
 		snap.CategoryNS[d.meta.categoryName(cat)] += ns

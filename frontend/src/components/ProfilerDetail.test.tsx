@@ -256,4 +256,29 @@ describe('ProfilerDetail', () => {
     await userEvent.click(copyBtn);
     expect(writeText).toHaveBeenCalledWith('GC.Alloc\nPlayerController.Update ()');
   });
+
+  it('Timeline 展示采样泳道，单击选中', async () => {
+    const tree = [{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 10,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      startMs: 0,
+      children: [{
+        name: 'BehaviourUpdate',
+        category: 'Scripts',
+        totalMs: 3,
+        selfMs: 3,
+        calls: 1,
+        gcAllocKB: 0,
+        startMs: 2,
+      }],
+    }];
+    render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} />);
+    await userEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
+    expect(screen.getByTestId('cpu-timeline')).toBeInTheDocument();
+    expect(screen.getByTestId('cpu-timeline-threads')).toHaveTextContent('Main Thread');
+  });
 });

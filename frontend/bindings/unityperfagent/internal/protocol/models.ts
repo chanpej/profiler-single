@@ -97,6 +97,11 @@ export interface SampleNode {
     "calls": number;
 
     /**
+     * StartMs 相对本帧起点的开始时间，供 Timeline 按真实时序摆放；Hierarchy 合并后取最早一次。
+     */
+    "startMs"?: number;
+
+    /**
      * GCAllocKB 含子树分配量（与 Unity Profiler 的 GC Alloc 列一致），不是仅自身。
      */
     "gcAllocKB": number;

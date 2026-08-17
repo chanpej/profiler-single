@@ -34,5 +34,19 @@ describe('normalizeSampleTree', () => {
     expect(got[0].callstack).toBeUndefined();
     expect(got[0].children?.[0].callstack).toEqual(['GC.Alloc']);
     expect(got[0].children?.[0].children).toBeUndefined();
+    expect(got[0].startMs).toBeUndefined();
+  });
+
+  it('保留 startMs', () => {
+    const got = normalizeSampleTree([{
+      name: 'Main Thread',
+      category: 'Internal',
+      totalMs: 10,
+      selfMs: 1,
+      calls: 1,
+      gcAllocKB: 0,
+      startMs: 2.5,
+    }]);
+    expect(got[0].startMs).toBe(2.5);
   });
 });

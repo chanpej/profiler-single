@@ -8,6 +8,7 @@ export interface WireSampleNode {
   selfMs: number;
   calls: number;
   gcAllocKB: number;
+  startMs?: number | null;
   callstack?: string[] | null;
   children?: WireSampleNode[] | null;
 }
@@ -26,6 +27,7 @@ function normalizeSample(n: WireSampleNode): SampleNode {
     selfMs: n.selfMs,
     calls: n.calls,
     gcAllocKB: n.gcAllocKB,
+    startMs: n.startMs ?? undefined,
     callstack: n.callstack ?? undefined,
     children: n.children ? normalizeSampleTree(n.children) : undefined,
   };
