@@ -1,4 +1,4 @@
-import { Minus, Square, Copy, X, Activity } from 'lucide-react';
+import { Minus, Square, Copy, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { createWindowControls, type WindowControls } from '../lib/window';
 
@@ -29,9 +29,7 @@ export function TitleBar({ title = 'UnityPerfAgent', subtitle = '', controls }: 
           win.toggleMaximise().then(refresh).catch(() => {});
         }}
       >
-        <span className="titlebar-icon" aria-hidden>
-          <Activity size={14} />
-        </span>
+        <img className="titlebar-icon" src="/app-icon.png" alt="" aria-hidden="true" data-testid="titlebar-icon" />
         <span className="titlebar-title">{title}</span>
         {subtitle ? <span className="titlebar-sub">{subtitle}</span> : null}
       </div>

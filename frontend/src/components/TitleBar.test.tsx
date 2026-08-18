@@ -18,6 +18,7 @@ describe('TitleBar', () => {
   it('显示标题与窗口按钮', () => {
     render(<TitleBar title="UnityPerfAgent" controls={mockWin()} />);
     expect(screen.getByTestId('titlebar')).toBeInTheDocument();
+    expect(screen.getByTestId('titlebar-icon')).toHaveAttribute('src', '/app-icon.png');
     expect(screen.getByText('UnityPerfAgent')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '最小化' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '最大化' })).toBeInTheDocument();

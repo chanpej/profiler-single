@@ -85,10 +85,10 @@ body {
 }
 
 .titlebar-icon {
-  color: var(--accent);
-  display: grid;
-  place-items: center;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
+  display: block;
 }
 
 .titlebar-title {
