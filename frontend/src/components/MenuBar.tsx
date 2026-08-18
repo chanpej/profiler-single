@@ -3,9 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 export type MenuId = 'file' | 'view';
 
 interface Props {
-  canSave?: boolean;
   onImport: () => void;
-  onExport: () => void;
   onClear: () => void;
   onFrames: () => void;
   onAnalysis: () => void;
@@ -16,8 +14,7 @@ interface Props {
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  canSave = true,
-  onImport, onExport, onClear, onFrames, onAnalysis, onSettings, onToggleAgent, agentCollapsed = false,
+  onImport, onClear, onFrames, onAnalysis, onSettings, onToggleAgent, agentCollapsed = false,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -68,9 +65,7 @@ export function MenuBar({
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onImport)}>
               加载数据
             </button>
-            <button type="button" className="menubar-cmd" role="menuitem" disabled={!canSave} onClick={() => run(onExport)}>
-              导出数据
-            </button>
+
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onClear)}>
               清空数据
             </button>

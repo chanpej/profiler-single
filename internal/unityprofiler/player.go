@@ -33,11 +33,15 @@ type Player struct {
 	// HeaderBeforeAnnounce 模拟"连接时 Player 已在采集"：数据流头先于宣告到达。
 	HeaderBeforeAnnounce bool
 
-	ln     net.Listener
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ln      net.Listener
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	connsMu sync.Mutex
+	conns   []net.Conn
 	// csFlags 是 Editor 下发的分配调用栈掩码（MsgIDProfilerSetup 报文体）。
 	csFlags atomic.Uint32
+	// paused 为真时停发帧，模拟 Android 切后台 / 系统对话框导致的 OnApplicationPause。
+	paused atomic.Bool
 }
 
 // 假 Player 使用的分类、marker 与计数器编号。
@@ -178,6 +182,39 @@ func (p *Player) Stop() {
 	p.wg.Wait()
 }
 
+// SetPaused 暂停或恢复发帧，模拟游戏切到后台。
+func (p *Player) SetPaused(on bool) { p.paused.Store(on) }
+
+// DropClients 关掉当前已接受的 Profiler 连接但继续监听，模拟 Unity 弹出
+// native Activity 时把 PlayerConnection 掐掉（对端 EOF），Activity 关掉后还能再连上。
+func (p *Player) DropClients() {
+	p.connsMu.Lock()
+	conns := append([]net.Conn(nil), p.conns...)
+	p.conns = nil
+	p.connsMu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
+func (p *Player) trackConn(c net.Conn) {
+	p.connsMu.Lock()
+	p.conns = append(p.conns, c)
+	p.connsMu.Unlock()
+}
+
+func (p *Player) untrackConn(c net.Conn) {
+	p.connsMu.Lock()
+	out := p.conns[:0]
+	for _, x := range p.conns {
+		if x != c {
+			out = append(out, x)
+		}
+	}
+	p.conns = out
+	p.connsMu.Unlock()
+}
+
 func (p *Player) info(port int) PlayerInfo {
 	return PlayerInfo{
 		IP:          "127.0.0.1",
@@ -192,6 +229,8 @@ func (p *Player) info(port int) PlayerInfo {
 
 func (p *Player) serve(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	p.trackConn(conn)
+	defer p.untrackConn(conn)
 
 	go p.readCommands(ctx, conn)
 
@@ -251,6 +290,9 @@ func (p *Player) serve(ctx context.Context, conn net.Conn) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if p.paused.Load() {
+				continue
+			}
 			events.Reset()
 			renderEvents.Reset()
 			gen.writeFrame(&events, &renderEvents, p.csFlags.Load())

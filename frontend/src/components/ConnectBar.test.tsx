@@ -120,4 +120,18 @@ describe('ConnectBar', () => {
     const version = screen.getByText('Unity 2021.3.30f1');
     expect(version).toHaveClass('unity-unsupported');
   });
+
+  it('shows waiting state and disconnect while reconnecting', async () => {
+    const onDisconnect = vi.fn();
+    const reconnecting: Status = {
+      ...usbConnected,
+      connected: false,
+      reconnecting: true,
+    };
+    renderBar({ status: reconnecting, packageId: 'com.company.game', onDisconnect });
+    expect(screen.getByText(/等待游戏恢复/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: BTN_USB })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: BTN_DISCONNECT }));
+    expect(onDisconnect).toHaveBeenCalled();
+  });
 });

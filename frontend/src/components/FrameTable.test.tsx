@@ -42,7 +42,8 @@ describe('FrameTable', () => {
     });
     expect(fetchRange).toHaveBeenCalledWith(0, 200);
     // 单元格数值渲染正确。
-    expect(screen.getAllByText('16.6ms').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('16.60ms').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('4.0 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('900.0k').length).toBeGreaterThan(0);
   });
 

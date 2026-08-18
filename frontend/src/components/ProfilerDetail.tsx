@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { ClipboardCopy } from 'lucide-react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
 import { memorySimpleRows, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
-import { formatCount, formatFps, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
+import { formatCount, formatFps, formatGCAlloc, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
 import { categoryColor, flattenVisible, mergeExpanded, mergeSampleNodes } from '../lib/hierarchy';
 import { copyText } from '../lib/agentChatUi';
 import { CpuTimeline } from './CpuTimeline';
@@ -125,14 +125,21 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
     [expanded, merged, callStacks],
   );
   const rows = useMemo(() => flattenVisible(merged, visibleExpanded), [merged, visibleExpanded]);
+  // Unity Hierarchy 的 Total / Self 百分比以当前线程根采样的总耗时为基准。
+  const rootTotalMs = useMemo(
+    () => merged.reduce((max, node) => Math.max(max, node.totalMs), 0),
+    [merged],
+  );
   const metricValues = useMemo(
     () => rows.map((r) => [
+      formatPct(rootTotalMs > 0 ? (r.node.totalMs / rootTotalMs) * 100 : 0),
+      formatPct(rootTotalMs > 0 ? (r.node.selfMs / rootTotalMs) * 100 : 0),
+      String(r.node.calls),
+      formatGCAlloc(r.node.gcAllocKB),
       formatMs(r.node.totalMs),
       formatMs(r.node.selfMs),
-      String(r.node.calls),
-      r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—',
     ]),
-    [rows],
+    [rows, rootTotalMs],
   );
   const metricWidths = useMemo(
     () => metricColumnWidths(METRIC_HEADERS, metricValues),
@@ -225,14 +232,13 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
                     onPointerCancel={onOverviewPointerUp}
                   />
                 </th>
-                <th className="col-metric">Total</th>
-                <th className="col-metric">Self</th>
-                <th className="col-metric">Calls</th>
-                <th className="col-metric">GC Alloc</th>
+                {METRIC_HEADERS.map((header) => (
+                  <th key={header} className="col-metric">{header}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {rows.map((r, rowIndex) => (
                 <tr
                   key={r.path}
                   className={selected === r.path ? 'is-selected' : ''}
@@ -265,10 +271,9 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
                       <span className="hierarchy-name" title={r.node.name}>{r.node.name}</span>
                     </span>
                   </td>
-                  <td className="mono col-metric">{formatMs(r.node.totalMs)}</td>
-                  <td className="mono col-metric">{formatMs(r.node.selfMs)}</td>
-                  <td className="mono col-metric">{r.node.calls}</td>
-                  <td className="mono col-metric">{r.node.gcAllocKB > 0 ? `${r.node.gcAllocKB.toFixed(1)} KB` : '—'}</td>
+                  {metricValues[rowIndex].map((value, metricIndex) => (
+                    <td key={METRIC_HEADERS[metricIndex]} className="mono col-metric">{value}</td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -374,7 +379,7 @@ function MemorySimple({ frame }: { frame: FrameData }) {
         ))}
         <tr>
           <td>GC Alloc</td>
-          <td className="mono">{frame.gcAllocKB.toFixed(1)} KB</td>
+          <td className="mono">{formatGCAlloc(frame.gcAllocKB)}</td>
           <td className="mono">—</td>
         </tr>
       </tbody>

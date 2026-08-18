@@ -1,5 +1,5 @@
-import { ChevronLeft, ChevronRight, Circle, Eraser, FolderOpen, Layers, ListTree, MousePointerClick, Pause, Play, Save, SkipForward } from 'lucide-react';
-import { formatFps, formatMs } from '../lib/format';
+import { ChevronLeft, ChevronRight, Circle, Eraser, FolderOpen, Layers, ListTree, MousePointerClick, Pause, Play, SkipForward } from 'lucide-react';
+import { formatFps, formatGCAlloc, formatMs } from '../lib/format';
 import type { FrameData } from '../types';
 
 interface Props {
@@ -17,7 +17,7 @@ interface Props {
   onCurrent: () => void;
   onToggleRecord: () => void;
   onPause: () => void;
-  onExport: () => void;
+
   onImport: () => void;
   onDeepProfiling?: (on: boolean) => void;
   onCallStacks?: (on: boolean) => void;
@@ -27,7 +27,7 @@ interface Props {
 export function ProfilerToolbar({
   recording, connected, frame, selectedIndex, total,
   deepProfiling = false, callStacks = false,
-  onClear, onPrev, onNext, onSeek, onCurrent, onToggleRecord, onPause, onExport, onImport,
+  onClear, onPrev, onNext, onSeek, onCurrent, onToggleRecord, onPause, onImport,
   onDeepProfiling, onCallStacks,
 }: Props) {
   const hasSelection = total > 0 && selectedIndex >= 0;
@@ -97,9 +97,7 @@ export function ProfilerToolbar({
       <button type="button" className="btn ghost" onClick={onImport} title="加载二进制数据" aria-label="加载数据">
         <FolderOpen size={14} aria-hidden />
       </button>
-      <button type="button" className="btn ghost" onClick={onExport} disabled={total === 0} title="导出为紧凑二进制" aria-label="导出数据">
-        <Save size={14} aria-hidden />
-      </button>
+
       <span className="profiler-sep" aria-hidden />
       <button type="button" className="btn ghost" disabled={atStart} onClick={onPrev} title="上一帧" aria-label="上一帧">
         <ChevronLeft size={16} aria-hidden />
@@ -107,14 +105,14 @@ export function ProfilerToolbar({
       <input
         className="input profiler-frame-input"
         aria-label="当前帧"
-        value={hasSelection ? String(selectedIndex) : ''}
+        value={hasSelection ? String(selectedIndex + 1) : ''}
         onChange={(e) => {
           const n = Number.parseInt(e.target.value, 10);
-          if (Number.isInteger(n)) onSeek(n);
+          if (Number.isInteger(n) && n >= 1) onSeek(n - 1);
         }}
         disabled={total === 0}
       />
-      <span className="dim">/ {Math.max(total - 1, 0)}</span>
+      <span className="dim">/ {total}</span>
       <button type="button" className="btn ghost" disabled={atEnd} onClick={onNext} title="下一帧" aria-label="下一帧">
         <ChevronRight size={16} aria-hidden />
       </button>
@@ -129,7 +127,7 @@ export function ProfilerToolbar({
             CPU {formatMs(frame.cpuTimeMs)}
             {'  '}
             {formatFps(frame.fps)} FPS
-            {frame.gcAllocKB > 0 ? `  GC ${frame.gcAllocKB.toFixed(1)} KB` : ''}
+            {frame.gcAllocKB > 0 ? `  GC ${formatGCAlloc(frame.gcAllocKB)}` : ''}
           </span>
         </>
       ) : (

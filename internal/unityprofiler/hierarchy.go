@@ -26,6 +26,15 @@ func cloneValues(in []value) []value {
 	return out
 }
 
+func cloneAddrs(in []uint64) []uint64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]uint64, len(in))
+	copy(out, in)
+	return out
+}
+
 func buildHierarchy(d *Decoder, roots []*treeNode, originNS int64) []protocol.SampleNode {
 	nodes := treeToSamples(d, roots, originNS)
 	// Timeline 需要未合并的时序实例；Hierarchy 页签在前端再按名字合并。

@@ -9,7 +9,7 @@ function progress(over: Partial<ImportProgressEvent> = {}): ImportProgressEvent 
     done: 4,
     total: 10,
     percent: 40,
-    fileName: 'boss.upac',
+    fileName: 'boss.data',
     ...over,
   };
 }
@@ -23,7 +23,7 @@ describe('ProgressPopup', () => {
   it('展示解析文案、文件名与百分比', () => {
     render(<ProgressPopup progress={progress()} />);
     expect(screen.getByRole('dialog', { name: '正在解析 Profiler 数据…' })).toBeInTheDocument();
-    expect(screen.getByText('boss.upac')).toBeInTheDocument();
+    expect(screen.getByText('boss.data')).toBeInTheDocument();
     expect(screen.getByText('40%')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: '解析进度' })).toHaveAttribute('aria-valuenow', '40');
   });

@@ -9,7 +9,7 @@ export const DEFAULT_CALLSTACK_RATIO = 0.32;
 export const MIN_CALLSTACK_RATIO = 0.16;
 export const MAX_CALLSTACK_RATIO = 0.6;
 
-export const METRIC_HEADERS = ['Total', 'Self', 'Calls', 'GC Alloc'] as const;
+export const METRIC_HEADERS = ['Total', 'Self', 'Calls', 'GC Alloc', 'Time ms', 'Self ms'] as const;
 export const HIERARCHY_UI_FONT = "500 12px Inter, 'Segoe UI', system-ui, sans-serif";
 export const HIERARCHY_MONO_FONT = "12px 'Cascadia Code', Menlo, Consolas, monospace";
 /** 单元格左右 padding 8px × 2，再留一点余量避免贴边。 */

@@ -2,209 +2,129 @@ package capture
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-
 	"unityperfagent/internal/protocol"
-	"unityperfagent/internal/unityprofiler"
 )
 
-func sampleFrame(i int) protocol.FrameData {
-	return protocol.FrameData{
-		FrameIndex:     uint64(i),
-		TimestampMs:    int64(1_000 + i),
-		FPS:            59.7,
-		CPUTimeMs:      16.4,
-		GPUTimeMs:      12.1,
-		MainThreadMs:   14.2,
-		RenderMs:       6.3,
-		GCAllocKB:      128.5,
-		UsedMemMB:      512.25,
-		DrawCalls:      uint32(300 + i),
-		CPURenderingMs: 5.2,
-		CPUScriptsMs:   4.1,
-		GCUsedMB:       180.5,
-		ShadowCasters:  18,
-		UIBatches:      24,
-	}
-}
-
-func TestEncodeDecodeRoundTrip(t *testing.T) {
-	in := File{
-		Handshake: protocol.Handshake{
-			DeviceName:   "Pixel 7",
-			DeviceModel:  "Google Pixel 7",
-			OS:           "Android 14",
-			UnityVersion: "2022.3.47f1",
-			AppVersion:   "1.0.0",
-		},
-		Frames: []protocol.FrameData{sampleFrame(0), sampleFrame(1), sampleFrame(2)},
-	}
-	var buf bytes.Buffer
-	if err := Encode(&buf, in); err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	meta, _ := protocol.EncodeHandshake(&in.Handshake)
-	wantSize := EncodedSize(len(in.Frames), len(meta))
-	if buf.Len() != wantSize {
-		t.Fatalf("encoded size = %d, want %d", buf.Len(), wantSize)
-	}
-	got, err := Decode(&buf)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	if got.Handshake.DeviceName != in.Handshake.DeviceName || got.Handshake.UnityVersion != in.Handshake.UnityVersion {
-		t.Fatalf("handshake = %+v", got.Handshake)
-	}
-	if len(got.Frames) != 3 {
-		t.Fatalf("frames = %d", len(got.Frames))
-	}
-	for i, f := range got.Frames {
-		if f != in.Frames[i] {
-			t.Fatalf("frame %d mismatch:\n got %+v\nwant %+v", i, f, in.Frames[i])
-		}
-	}
-}
-
-func TestEncodeDecodeEmpty(t *testing.T) {
-	var buf bytes.Buffer
-	if err := Encode(&buf, File{}); err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	if buf.Len() != EncodedSize(0, 0) {
-		t.Fatalf("empty size = %d, want %d", buf.Len(), EncodedSize(0, 0))
-	}
-	got, err := Decode(&buf)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	if len(got.Frames) != 0 || got.Handshake.DeviceName != "" {
-		t.Fatalf("got %+v", got)
-	}
-}
-
-func TestDecodeBadMagic(t *testing.T) {
-	data := make([]byte, headerSize)
-	copy(data, []byte("XXXX"))
-	_, err := Decode(bytes.NewReader(data))
-	if !errors.Is(err, ErrBadMagic) {
-		t.Fatalf("err = %v, want ErrBadMagic", err)
-	}
-}
-
-func TestDecodeUnsupportedVersion(t *testing.T) {
-	h := header{Magic: Magic, Version: 99, FrameSize: uint16(protocol.FramePayloadSize)}
-	var buf bytes.Buffer
-	if err := h.writeTo(&buf); err != nil {
+func TestLoadOfficialUnity2022Data(t *testing.T) {
+	path := filepath.Join("..", "..", "test", "testdata", "unity-profiler.data")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("official Unity .data fixture is not available")
+	} else if err != nil {
 		t.Fatal(err)
 	}
-	_, err := Decode(&buf)
-	if !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("err = %v, want ErrUnsupportedVersion", err)
-	}
-}
-
-func TestDecodeTruncatedFrame(t *testing.T) {
-	in := File{Frames: []protocol.FrameData{sampleFrame(0)}}
-	var buf bytes.Buffer
-	if err := Encode(&buf, in); err != nil {
-		t.Fatal(err)
-	}
-	raw := buf.Bytes()[:buf.Len()-8]
-	_, err := Decode(bytes.NewReader(raw))
-	if err == nil {
-		t.Fatal("expected truncated error")
-	}
-}
-
-func TestSaveLoadFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "session.upac")
-	in := File{
-		Handshake: protocol.Handshake{DeviceName: "Mi MIX 2S", UnityVersion: "2022.3.47f1"},
-		Frames:    []protocol.FrameData{sampleFrame(7), sampleFrame(8)},
-	}
-	if err := SaveFile(path, in); err != nil {
-		t.Fatalf("SaveFile: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Size() != int64(EncodedSize(2, len(`{"deviceName":"Mi MIX 2S","deviceModel":"","os":"","unityVersion":"2022.3.47f1","appVersion":"","profilerStreamVersion":0}`))) {
-		// 以 Decode 正确性为准，体积只需明显小于 JSON 展开。
-		if info.Size() > 1024 {
-			t.Fatalf("file too large for 2 frames: %d", info.Size())
-		}
-	}
-	got, err := LoadFile(path)
+	file, err := LoadFile(path)
 	if err != nil {
 		t.Fatalf("LoadFile: %v", err)
 	}
-	if got.Handshake.DeviceName != "Mi MIX 2S" || len(got.Frames) != 2 || got.Frames[1].FrameIndex != 8 {
-		t.Fatalf("got %+v", got)
+	if file.Handshake.UnityVersion != "2022.3.47f1" {
+		t.Fatalf("unity version = %q", file.Handshake.UnityVersion)
+	}
+	if file.Handshake.ProfilerStreamVersion != unity2022DataVersion {
+		t.Fatalf("format version = %#x", file.Handshake.ProfilerStreamVersion)
+	}
+	if len(file.Frames) != 299 {
+		t.Fatalf("frames = %d, want 299", len(file.Frames))
+	}
+	first, last := file.Frames[0], file.Frames[len(file.Frames)-1]
+	if first.FrameIndex != 1 || last.FrameIndex != 299 {
+		t.Fatalf("frame range = %d..%d, want 1..299", first.FrameIndex, last.FrameIndex)
+	}
+	if first.TimestampMs == 0 || first.FPS < 29 || first.FPS > 30 || first.CPUTimeMs < 33 || first.CPUTimeMs > 34 || first.CPURenderingMs <= 0 || first.CPUScriptsMs <= 0 {
+		t.Fatalf("first frame = %+v", first)
+	}
+	if len(file.Hierarchies) != len(file.Frames) || len(file.Hierarchies[0]) == 0 || file.Hierarchies[0][0].Name != "Main Thread" || !hasSample(file.Hierarchies[0], "PlayerLoop") {
+		t.Fatalf("hierarchy = %+v", file.Hierarchies[0])
+	}
+	// 第 59 帧（Player 内部编号 452）是 Unity Editor 中 GC Alloc 为 1.2 MB 的帧。
+	// Size 元数据应归因至 GC.Alloc 采样，并向 Update/根节点上卷。
+	frame59 := file.Frames[58]
+	if frame59.GCAllocKB < 1200 || frame59.GCAllocKB > 1300 {
+		t.Fatalf("frame 59 GC allocation = %.2f KB, want about 1230.6 KB", frame59.GCAllocKB)
+	}
+	update, ok := findSample(file.Hierarchies[58], "Update.ScriptRunBehaviourUpdate")
+	if !ok || update.GCAllocKB < 1200 || update.GCAllocKB > 1300 {
+		t.Fatalf("frame 59 ScriptRunBehaviourUpdate = %+v, want about 1230.6 KB", update)
+	}
+	if !IsFiniteFPS(first.FPS) {
+		t.Fatalf("fps must be finite: %v", first.FPS)
 	}
 }
 
-func TestCompactVsJSON(t *testing.T) {
-	frames := make([]protocol.FrameData, 1000)
-	for i := range frames {
-		frames[i] = sampleFrame(i)
-	}
-	var buf bytes.Buffer
-	if err := Encode(&buf, File{Frames: frames}); err != nil {
-		t.Fatal(err)
-	}
-	want := EncodedSize(1000, 0)
-	if buf.Len() != want {
-		t.Fatalf("size = %d, want %d", buf.Len(), want)
-	}
-	// 1000 帧应远小于同等 JSON（每帧 JSON 约 600B+）。
-	if buf.Len() > 1000*protocol.FramePayloadSize+headerSize {
-		t.Fatalf("not compact: %d", buf.Len())
-	}
+func hasSample(nodes []protocol.SampleNode, name string) bool {
+	_, ok := findSample(nodes, name)
+	return ok
 }
 
-func TestEncodeDecodeRawRoundTrip(t *testing.T) {
-	in := File{
-		Handshake: protocol.Handshake{DeviceName: "Pixel 7", UnityVersion: "2022.3.47f1"},
-		Raw:       unityprofiler.SampleProfilerCapture(),
-	}
-	var buf bytes.Buffer
-	if err := Encode(&buf, in); err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	got, err := Decode(&buf)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	if got.Handshake.DeviceName != "Pixel 7" || got.Handshake.UnityVersion != "2022.3.47f1" {
-		t.Fatalf("handshake = %+v", got.Handshake)
-	}
-	if len(got.Frames) != 0 {
-		t.Fatalf("raw archive should not store processed frames, got %d", len(got.Frames))
-	}
-	if len(got.Raw) != len(in.Raw) {
-		t.Fatalf("raw chunks = %d, want %d", len(got.Raw), len(in.Raw))
-	}
-	for i := range in.Raw {
-		if !bytes.Equal(got.Raw[i], in.Raw[i]) {
-			t.Fatalf("chunk %d mismatch", i)
+func findSample(nodes []protocol.SampleNode, name string) (protocol.SampleNode, bool) {
+	for _, node := range nodes {
+		if node.Name == name {
+			return node, true
+		}
+		if found, ok := findSample(node.Children, name); ok {
+			return found, true
 		}
 	}
+	return protocol.SampleNode{}, false
 }
 
-func TestDecodeTruncatedRawChunk(t *testing.T) {
-	in := File{Raw: unityprofiler.SampleProfilerCapture()}
-	var buf bytes.Buffer
-	if err := Encode(&buf, in); err != nil {
+func TestReadGCAllocMetadataAssociatesSampleSizes(t *testing.T) {
+	body := make([]byte, 40)
+	// 元数据记录按 sample index / Size(bytes) 连续保存；从 metadataStart+4
+	// 开始，覆盖不同于零偏移的 8-byte 对齐情况。
+	binary.LittleEndian.PutUint32(body[12:], 0)
+	binary.LittleEndian.PutUint32(body[16:], 64)
+	binary.LittleEndian.PutUint32(body[20:], 2)
+	binary.LittleEndian.PutUint32(body[24:], 512)
+	binary.LittleEndian.PutUint32(body[28:], ^uint32(0))
+
+	samples := []diskSample{{markerID: 7}, {markerID: 8}, {markerID: 7}}
+	readGCAllocMetadata(body, 8, samples, map[uint32]markerInfo{
+		7: {name: "GC.Alloc"},
+		8: {name: "Other"},
+	})
+	if samples[0].gcAllocBytes != 64 || samples[1].gcAllocBytes != 0 || samples[2].gcAllocBytes != 512 {
+		t.Fatalf("GC allocation bytes = %+v", samples)
+	}
+}
+
+func TestDecodeRejectsUPAC(t *testing.T) {
+	_, err := Decode(bytes.NewReader([]byte("UPAC")))
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("err = %v, want unsupported version", err)
+	}
+}
+
+func TestDecodeRejectsCorruptFrameEndMarker(t *testing.T) {
+	var b bytes.Buffer
+	header := make([]byte, blockHeaderSize)
+	binary.LittleEndian.PutUint32(header[0:], unity2022DataVersion)
+	binary.LittleEndian.PutUint32(header[4:], 4)
+	binary.LittleEndian.PutUint32(header[8:], 2022)
+	binary.LittleEndian.PutUint32(header[12:], 3)
+	binary.LittleEndian.PutUint32(header[16:], 47)
+	binary.LittleEndian.PutUint32(header[20:], 2)
+	binary.LittleEndian.PutUint32(header[24:], 1)
+	b.Write(header)
+	b.Write(make([]byte, 4))
+	binary.Write(&b, binary.LittleEndian, fileEndMarker)
+	_, err := Decode(&b)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("结束标记")) {
+		t.Fatalf("err = %v, want frame end-marker error", err)
+	}
+}
+
+func TestLoadFileDoesNotAcceptOldUPAC(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.upac")
+	if err := os.WriteFile(path, []byte("UPAC"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw := buf.Bytes()[:buf.Len()-8]
-	_, err := Decode(bytes.NewReader(raw))
-	if err == nil {
-		t.Fatal("expected truncated raw error")
+	_, err := LoadFile(path)
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("err = %v", err)
 	}
 }

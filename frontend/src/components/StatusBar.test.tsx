@@ -41,6 +41,12 @@ describe('StatusBar', () => {
     expect(screen.getByText('Codex')).toBeInTheDocument();
   });
 
+  it('重连中显示等待游戏恢复', () => {
+    render(<StatusBar status={{ ...live, connected: false, reconnecting: true }} />);
+    expect(screen.getByText('等待游戏恢复')).toBeInTheDocument();
+    expect(screen.getByText('等待恢复')).toBeInTheDocument();
+  });
+
   it('busy 时显示处理中', () => {
     render(<StatusBar status={disconnected} busy />);
     expect(screen.getByText('处理中…')).toBeInTheDocument();

@@ -22,7 +22,8 @@ export function ConnectBar({
   onClear,
 }: Props) {
   const unityLabel = status.device.unityVersion === '' ? 'Unity 未知' : `Unity ${status.device.unityVersion}`;
-  const canConnect = packageId.trim() !== '' && !busy && !status.connected;
+  const live = status.connected || !!status.reconnecting;
+  const canConnect = packageId.trim() !== '' && !busy && !live;
 
   return (
     <div className="connect-bar">
@@ -36,11 +37,11 @@ export function ConnectBar({
         spellCheck={false}
         disabled={busy}
       />
-      {status.connected ? (
+      {live ? (
         <>
-          <span className={`conn-dot on`} aria-hidden />
+          <span className={`conn-dot ${status.connected ? 'on' : 'wait'}`} aria-hidden />
           <span className="conn-info">
-            {status.device.deviceName}
+            {status.reconnecting && !status.connected ? '等待游戏恢复' : status.device.deviceName}
             {status.transport === 'adb' ? ' · USB' : ''}
             {' · '}
             <span

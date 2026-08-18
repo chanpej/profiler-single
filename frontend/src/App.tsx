@@ -171,11 +171,7 @@ function App() {
     if (!status.connected) return;
     guard(() => api.setRecording(!recording));
   };
-  const onExport = () => guard(async () => {
-    const path = await captureDialogs.save();
-    if (!path) return;
-    await api.exportCapture(path);
-  });
+
   const onImport = () => guard(async () => {
     const path = await captureDialogs.open();
     if (!path) return;
@@ -202,9 +198,7 @@ function App() {
     <div className="app">
       <TitleBar controls={windowControls} />
       <MenuBar
-        canSave={!!status.hasRaw}
         onImport={onImport}
-        onExport={onExport}
         onClear={onClear}
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}
@@ -236,7 +230,7 @@ function App() {
             onClear={onClear}
             onToggleRecord={onToggleRecord}
             onPause={onPause}
-            onExport={onExport}
+
             onImport={onImport}
             onDeepProfiling={onDeepProfiling}
             onCallStacks={onCallStacks}

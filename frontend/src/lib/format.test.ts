@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { formatClock, formatCount, formatFps, formatKB, formatMB, formatMB1, formatMs, formatPct, formatProfilerValue, fpsLevel } from './format';
+import { formatClock, formatCount, formatFps, formatGCAlloc, formatKB, formatMB, formatMB1, formatMs, formatPct, formatProfilerValue, fpsLevel } from './format';
 
 describe('formatMs', () => {
-  it('保留 1 位小数并带单位', () => {
-    expect(formatMs(16.66)).toBe('16.7ms');
-    expect(formatMs(0)).toBe('0.0ms');
+  it('保留 2 位小数并带单位', () => {
+    expect(formatMs(16.66)).toBe('16.66ms');
+    expect(formatMs(0)).toBe('0.00ms');
   });
   it('非法值返回占位符', () => {
     expect(formatMs(NaN)).toBe('--');
@@ -69,6 +69,20 @@ describe('formatMB1', () => {
   });
 });
 
+describe('formatGCAlloc', () => {
+  it('按 B / KB / MB 切换并固定保留 1 位小数', () => {
+    expect(formatGCAlloc(0)).toBe('0.0 B');
+    expect(formatGCAlloc(0.5)).toBe('512.0 B');
+    expect(formatGCAlloc(12.34)).toBe('12.3 KB');
+    expect(formatGCAlloc(1230.6)).toBe('1.2 MB');
+  });
+
+  it('非法值返回占位符', () => {
+    expect(formatGCAlloc(-1)).toBe('--');
+    expect(formatGCAlloc(NaN)).toBe('--');
+  });
+});
+
 describe('formatPct', () => {
   it('保留 1 位小数并带百分号', () => {
     expect(formatPct(12.34)).toBe('12.3%');
@@ -78,7 +92,7 @@ describe('formatPct', () => {
 
 describe('formatProfilerValue', () => {
   it('按单位分发', () => {
-    expect(formatProfilerValue(16.66, 'ms')).toBe('16.7ms');
+    expect(formatProfilerValue(16.66, 'ms')).toBe('16.66ms');
     expect(formatProfilerValue(12.3, 'mb')).toBe('12.3 MB');
     expect(formatProfilerValue(1500, 'count')).toBe('1.5k');
   });

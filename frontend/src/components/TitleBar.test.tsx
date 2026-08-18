@@ -25,8 +25,8 @@ describe('TitleBar', () => {
   });
 
   it('显示副标题', () => {
-    render(<TitleBar subtitle="session.upac" controls={mockWin()} />);
-    expect(screen.getByText('session.upac')).toBeInTheDocument();
+    render(<TitleBar subtitle="session.data" controls={mockWin()} />);
+    expect(screen.getByText('session.data')).toBeInTheDocument();
   });
 
   it('最小化 / 最大化 / 关闭回调', async () => {

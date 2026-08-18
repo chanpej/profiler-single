@@ -129,8 +129,10 @@ export interface Status {
   callStacks?: boolean;
   deepProfilerSupported?: boolean;
   managedCallstacksSupported?: boolean;
-  /** 最近一次采集异常中断的原因；正常断开时为空。 */
+  /** 最近一次采集异常中断的原因；正常断开、自动重连或未出错时为空。 */
   lastError?: string;
+  /** 游戏把 Profiler 连接掐掉后，正在等回到前台自动重连。 */
+  reconnecting?: boolean;
   /** 会话里是否有可导出的原始 Profiler 数据流。 */
   hasRaw?: boolean;
 }

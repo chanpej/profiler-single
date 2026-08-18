@@ -42,7 +42,7 @@ function renderView(over: Partial<ComponentProps<typeof ProfilerView>> = {}) {
       onClear={noop}
       onToggleRecord={noop}
       onPause={noop}
-      onExport={noop}
+
       onImport={noop}
       {...over}
     />,
@@ -67,9 +67,9 @@ describe('ProfilerView', () => {
 
   it('帧前进后退与 Current', async () => {
     renderView();
-    expect(screen.getByLabelText('当前帧')).toHaveValue('2');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('3');
     await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
-    expect(screen.getByLabelText('当前帧')).toHaveValue('1');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('2');
     await userEvent.click(screen.getByRole('button', { name: '最新帧' }));
     expect(screen.getByLabelText('当前帧')).toHaveValue('');
     expect(screen.getByText('选择一帧以查看详情')).toBeInTheDocument();
@@ -96,19 +96,18 @@ describe('ProfilerView', () => {
     expect(screen.getByText('Main Thread')).toBeInTheDocument();
   });
 
-  it('Record / Pause / Save / Load 触发回调', async () => {
+  it('Record / Pause / Load 触发回调', async () => {
     const onToggleRecord = vi.fn();
     const onPause = vi.fn();
-    const onExport = vi.fn();
     const onImport = vi.fn();
-    renderView({ onToggleRecord, onPause, onExport, onImport });
+    renderView({ onToggleRecord, onPause, onImport });
     await userEvent.click(screen.getByRole('button', { name: '正在采集' }));
     await userEvent.click(screen.getByRole('button', { name: '暂停抓取' }));
-    await userEvent.click(screen.getByRole('button', { name: '导出数据' }));
+
     await userEvent.click(screen.getByRole('button', { name: '加载数据' }));
     expect(onToggleRecord).toHaveBeenCalled();
     expect(onPause).toHaveBeenCalled();
-    expect(onExport).toHaveBeenCalled();
+
     expect(onImport).toHaveBeenCalled();
   });
 
@@ -133,15 +132,15 @@ describe('ProfilerView 时间轴视口', () => {
     expect(viewport()).toHaveAttribute('data-follow', 'true');
     expect(viewport()).toHaveAttribute('data-visible', '300');
     expect(viewport()).toHaveAttribute('data-start', '100');
-    expect(screen.getByLabelText('当前帧')).toHaveValue('399');
-    expect(screen.getByTestId('profiler-range')).toHaveTextContent('100–399 · 300帧');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('400');
+    expect(screen.getByTestId('profiler-range')).toHaveTextContent('101–400 · 300帧');
   });
 
   it('点选历史帧后停止跟随（视图暂停）', async () => {
     renderView({ frames: many });
     await userEvent.click(screen.getByRole('button', { name: '上一帧' }));
     expect(viewport()).toHaveAttribute('data-follow', 'false');
-    expect(screen.getByLabelText('当前帧')).toHaveValue('398');
+    expect(screen.getByLabelText('当前帧')).toHaveValue('399');
     expect(viewport()).toHaveAttribute('data-start', '100');
   });
 
@@ -167,7 +166,6 @@ describe('ProfilerView 时间轴视口', () => {
       onClear: noop,
       onToggleRecord: noop,
       onPause: noop,
-      onExport: noop,
       onImport: noop,
       getFrame,
       getHierarchy,
@@ -211,7 +209,7 @@ describe('ProfilerView 时间轴视口', () => {
   it('帧数不足一屏时滚动条禁用', () => {
     renderView();
     expect(screen.getByLabelText('时间轴滚动')).toBeDisabled();
-    expect(screen.getByTestId('profiler-range')).toHaveTextContent('0–2 · 3帧');
+    expect(screen.getByTestId('profiler-range')).toHaveTextContent('1–3 · 3帧');
   });
 
   it('切换模块时详情面板高度保持不变，拖拽可调高', async () => {

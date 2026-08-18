@@ -30,4 +30,10 @@ describe('statusBar labels', () => {
     expect(recordingLabel(st)).toBe('已暂停');
     expect(frameCountLabel(st)).toBe('100 / 200 帧');
   });
+
+  it('自动重连时显示等待游戏恢复', () => {
+    const st: Status = { ...base, reconnecting: true, transport: 'adb', retained: 12, totalFrames: 12 };
+    expect(connectionLabel(st)).toBe('等待游戏恢复');
+    expect(recordingLabel(st)).toBe('等待恢复');
+  });
 });

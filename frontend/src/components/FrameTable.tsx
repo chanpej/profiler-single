@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FrameData } from '../types';
-import { formatClock, formatCount, formatFps, formatMs, fpsLevel } from '../lib/format';
+import { formatClock, formatCount, formatFps, formatGCAlloc, formatMs, fpsLevel } from '../lib/format';
 
 interface Props {
   /** 当前可取的总帧数。 */
@@ -93,7 +93,7 @@ export function FrameTable({ totalCount, fetchRange }: Props) {
                     <span className={`mono fps-${fpsLevel(f.fps)}`}>{formatFps(f.fps)}</span>
                     <span className="mono">{formatMs(f.cpuTimeMs)}</span>
                     <span className="mono">{formatMs(f.gpuTimeMs)}</span>
-                    <span className="mono">{f.gcAllocKB.toFixed(0)}KB</span>
+                    <span className="mono">{formatGCAlloc(f.gcAllocKB)}</span>
                     <span className="mono">{f.usedMemMB.toFixed(0)}MB</span>
                     <span className="mono">{f.drawCalls}</span>
                     <span className="mono">{formatCount(f.triangles)}</span>

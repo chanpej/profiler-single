@@ -38,7 +38,7 @@ describe('ProfilerDetail', () => {
     render(<ProfilerDetail moduleId="cpu" frame={frame} />);
     expect(screen.getByText('Rendering')).toBeInTheDocument();
     expect(screen.getByText('Scripts')).toBeInTheDocument();
-    expect(screen.getByText('5.0ms')).toBeInTheDocument();
+    expect(screen.getByText('5.00ms')).toBeInTheDocument();
   });
 
   it('无选中帧显示提示', () => {
@@ -77,7 +77,7 @@ describe('ProfilerDetail', () => {
     const coarse = emptyFrame({ fps: 59.9, cpuTimeMs: 34.3, usedMemMB: 700 });
     const { rerender } = render(<ProfilerDetail moduleId="cpu" frame={coarse} />);
     expect(screen.getByText('Others')).toBeInTheDocument();
-    expect(screen.getByText('34.3ms')).toBeInTheDocument();
+    expect(screen.getByText('34.30ms')).toBeInTheDocument();
 
     rerender(<ProfilerDetail moduleId="rendering" frame={coarse} />);
     expect(screen.getByText('Frame Time')).toBeInTheDocument();
@@ -104,6 +104,13 @@ describe('ProfilerDetail', () => {
     render(<ProfilerDetail moduleId="cpu" frame={frame} hierarchy={tree} callStacks />);
     expect(screen.getByTestId('cpu-hierarchy')).toBeInTheDocument();
     expect(screen.getByText('Main Thread')).toBeInTheDocument();
+    const headers = [...screen.getByTestId('hierarchy-table').querySelectorAll('th')]
+      .map((cell) => cell.textContent);
+    expect(headers).toEqual(['Overview', 'Total', 'Self', 'Calls', 'GC Alloc', 'Time ms', 'Self ms']);
+    expect(screen.getByTestId('hierarchy-table')).toHaveTextContent('100.0%');
+    expect(screen.getByTestId('hierarchy-table')).toHaveTextContent('6.3%');
+    expect(screen.getByTestId('hierarchy-table')).toHaveTextContent('16.00ms');
+    expect(screen.getByTestId('hierarchy-table')).toHaveTextContent('1.00ms');
     await userEvent.click(screen.getByText('GC.Alloc'));
     expect(screen.getByTestId('callstack-pane')).toHaveTextContent('PlayerController.Update');
   });
@@ -178,7 +185,7 @@ describe('ProfilerDetail', () => {
     expect(name).toHaveAttribute('title', tree[0].name);
     expect(screen.getByTestId('cpu-hierarchy').style.getPropertyValue('--overview-w')).toBe(`${DEFAULT_OVERVIEW_WIDTH}px`);
     const cols = screen.getByTestId('hierarchy-table').querySelectorAll('col');
-    expect(cols).toHaveLength(5);
+    expect(cols).toHaveLength(7);
     expect(cols[0]).toHaveClass('col-overview');
     for (let i = 1; i < cols.length; i++) {
       expect(Number.parseInt(cols[i].style.width, 10)).toBeGreaterThan(0);

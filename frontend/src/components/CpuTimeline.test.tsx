@@ -60,7 +60,7 @@ describe('CpuTimeline', () => {
     fireEvent.pointerDown(plot, { clientX: x, clientY: y, button: 0, pointerId: 1 });
     fireEvent.pointerUp(plot, { clientX: x, clientY: y, button: 0, pointerId: 1 });
     expect(screen.getByTestId('cpu-timeline-status')).toHaveTextContent('BehaviourUpdate');
-    expect(screen.getByTestId('cpu-timeline-status')).toHaveTextContent('3.0ms');
+    expect(screen.getByTestId('cpu-timeline-status')).toHaveTextContent('3.00ms');
   });
 
   it('滚轮缩小可见窗口，适应按钮恢复整帧', () => {

@@ -72,7 +72,7 @@ export function ProfilerChart({
           ctx.moveTo(0, y);
           ctx.lineTo(w, y);
           ctx.stroke();
-          ctx.fillText(`${ref.toFixed(1)}ms`, 4, Math.max(10, y - 2));
+          ctx.fillText(`${ref.toFixed(2)}ms`, 4, Math.max(10, y - 2));
         }
       }
 

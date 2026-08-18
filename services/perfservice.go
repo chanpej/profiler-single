@@ -81,9 +81,12 @@ type Status struct {
 	// DeepProfilerSupported / ManagedCallstacksSupported 来自 Player 能力位。
 	DeepProfilerSupported      bool `json:"deepProfilerSupported"`
 	ManagedCallstacksSupported bool `json:"managedCallstacksSupported"`
-	// LastError 是最近一次采集异常中断的原因；正常断开或未出错时为空。
+	// LastError 是最近一次采集异常中断的原因；正常断开、对端 EOF 自动重连或未出错时为空。
 	// 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
 	LastError string `json:"lastError"`
+	// Reconnecting 表示用户仍要保持采集，但对端已断开（典型是 Android native Activity
+	// 盖住 Unity 时 PlayerConnection 直接 EOF），正在等游戏回到前台后自动重连。
+	Reconnecting bool `json:"reconnecting"`
 	// HasRaw 表示会话里有可导出的原始 Profiler 数据流。
 	HasRaw bool `json:"hasRaw"`
 }
@@ -109,18 +112,33 @@ type PerfService struct {
 	lastErr    string
 	chat       *llm.ChatSession
 
+	// wantLive 表示用户点了连接且尚未点断开。对端 EOF 后仍为 true，会自动重连。
+	wantLive        bool
+	reconnecting    bool
+	liveHS          protocol.Handshake
+	usbSerial       string
+	usbPackage      string
+	liveHost        string
+	livePort        int
+	liveKind        string
+	reconnectCancel context.CancelFunc
+
 	// tickReq 是"界面需要刷新"的合并信号，容量 1 且非阻塞投递。
 	tickReq chan struct{}
 	stopUI  chan struct{}
 }
 
+// reconnectInterval 是自动重连的间隔。native Activity 关掉后 Unity 会重建
+// localabstract:Unity-{包名}，需要反复探测直到它回来。
+var reconnectInterval = 400 * time.Millisecond
+
 // NewPerfService 创建服务实例。
 func NewPerfService() *PerfService {
 	p := &PerfService{
-		client:    device.NewClient(),
-		session:   collector.NewSession(0),
-		adbRun:    adbforward.DefaultRun,
-		emit:      func(string, any) {},
+		client:     device.NewClient(),
+		session:    collector.NewSession(0),
+		adbRun:     adbforward.DefaultRun,
+		emit:       func(string, any) {},
 		recording:  true,
 		captureRaw: true,
 		tickReq:    make(chan struct{}, 1),
@@ -210,6 +228,17 @@ func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, 
 		p.mu.Unlock()
 		return protocol.Handshake{}, errors.New("已有连接，请先断开")
 	}
+	if p.wantLive && p.reconnecting {
+		hs := p.liveHS
+		p.mu.Unlock()
+		return hs, nil
+	}
+	p.mu.Unlock()
+	return p.dialUSB(serial, packageID, true)
+}
+
+func (p *PerfService) dialUSB(serial, packageID string, fresh bool) (protocol.Handshake, error) {
+	p.mu.Lock()
 	run := p.adbRun
 	p.mu.Unlock()
 
@@ -237,7 +266,7 @@ func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, 
 			lastErr = err
 			continue
 		}
-		hs, err := p.connectTCP("127.0.0.1", tun.LocalPort, "adb")
+		hs, err := p.connectTCP("127.0.0.1", tun.LocalPort, "adb", fresh)
 		if err != nil {
 			_ = adbforward.Remove(run, tun)
 			wrapped := fmt.Errorf("adb forward 本机:%d -> %s 已建立。%w", tun.LocalPort, spec.Remote, err)
@@ -245,7 +274,6 @@ func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, 
 				return protocol.Handshake{}, wrapped
 			}
 			if errors.Is(err, unityprofiler.ErrPlayerSilent) {
-				// 通道是通的，问题在 Player 侧被占用，不该提示 Development Build。
 				return protocol.Handshake{}, wrapped
 			}
 			lastErr = fmt.Errorf("adb forward 本机:%d -> %s 已建立，但 Profiler 握手失败（需 Unity 2022 Development Build）: %w", tun.LocalPort, spec.Remote, err)
@@ -264,8 +292,15 @@ func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, 
 		})
 		hs, _ = p.client.Handshake()
 		p.mu.Lock()
+		old := p.tunnel
 		p.tunnel = &tun
+		p.usbSerial = dev.Serial
+		p.usbPackage = packageID
+		p.liveHS = hs
 		p.mu.Unlock()
+		if old != nil && (old.LocalPort != tun.LocalPort || old.Remote != tun.Remote) {
+			_ = adbforward.Remove(run, *old)
+		}
 		return hs, nil
 	}
 	if lastErr == nil {
@@ -274,26 +309,30 @@ func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, 
 	return protocol.Handshake{}, lastErr
 }
 
-func (p *PerfService) connectTCP(host string, port int, transport string) (protocol.Handshake, error) {
+func (p *PerfService) connectTCP(host string, port int, transport string, fresh bool) (protocol.Handshake, error) {
 	p.mu.Lock()
 	if p.connectedLocked() {
 		p.mu.Unlock()
 		return protocol.Handshake{}, errors.New("已有连接，请先断开")
 	}
-	p.session.ClearAll()
+	if fresh {
+		p.session.ClearAll()
+		p.sourceFile = ""
+		p.loadedHS = protocol.Handshake{}
+	}
 	p.transport = transport
 	p.recording = true
 	p.captureRaw = true
-	p.sourceFile = ""
-	p.loadedHS = protocol.Handshake{}
 	p.lastErr = ""
 	p.mu.Unlock()
 
 	hs, err := p.client.Connect(host, port, p.onFrame, p.onClosed)
 	if err != nil {
-		p.mu.Lock()
-		p.transport = ""
-		p.mu.Unlock()
+		if fresh {
+			p.mu.Lock()
+			p.transport = ""
+			p.mu.Unlock()
+		}
 		p.logf("连接 %s:%d(%s) 失败: %v", host, port, transport, err)
 		return protocol.Handshake{}, err
 	}
@@ -301,6 +340,18 @@ func (p *PerfService) connectTCP(host string, port int, transport string) (proto
 		host, port, transport, hs.DeviceName, hs.OS, hs.UnityVersion, hs.ProfilerStreamVersion)
 	p.mu.Lock()
 	deep, stacks := p.deep, p.callStacks
+	if fresh {
+		p.wantLive = true
+	} else if !p.wantLive {
+		p.mu.Unlock()
+		p.client.Close()
+		return protocol.Handshake{}, errors.New("已取消重连")
+	}
+	p.reconnecting = false
+	p.liveHost = host
+	p.livePort = port
+	p.liveKind = transport
+	p.liveHS = hs
 	p.mu.Unlock()
 	if deep || stacks {
 		if err := p.client.SetProfilerOptions(deep, stacks); err != nil {
@@ -321,6 +372,17 @@ func (p *PerfService) DiscoverPlayers() ([]unityprofiler.PlayerInfo, error) {
 
 // Disconnect 断开 Profiler 连接（并拆除 adb forward）。已采集数据保留。
 func (p *PerfService) Disconnect() {
+	p.mu.Lock()
+	p.wantLive = false
+	p.reconnecting = false
+	p.stopReconnectLocked()
+	p.usbSerial = ""
+	p.usbPackage = ""
+	p.liveHost = ""
+	p.livePort = 0
+	p.liveKind = ""
+	p.liveHS = protocol.Handshake{}
+	p.mu.Unlock()
 	p.client.Close()
 	p.mu.Lock()
 	p.transport = ""
@@ -342,13 +404,19 @@ func (p *PerfService) Status() Status {
 	recording := p.recording
 	sourceFile := p.sourceFile
 	loadedHS := p.loadedHS
+	liveHS := p.liveHS
 	deep := p.deep
 	callStacks := p.callStacks
 	lastErr := p.lastErr
+	reconnecting := p.reconnecting
 	p.mu.Unlock()
 	hs, _ := p.client.Handshake()
 	if hs == (protocol.Handshake{}) {
-		hs = loadedHS
+		if liveHS != (protocol.Handshake{}) {
+			hs = liveHS
+		} else {
+			hs = loadedHS
+		}
 	}
 	connected := p.client.Connected()
 	return Status{
@@ -358,7 +426,7 @@ func (p *PerfService) Status() Status {
 		Device:                     hs,
 		TotalFrames:                p.session.Total(),
 		Retained:                   p.session.Len(),
-		UnitySupported:             connected && hs.Supported(),
+		UnitySupported:             (connected || reconnecting) && hs.Supported(),
 		Recording:                  recording,
 		SourceFile:                 sourceFile,
 		DeepProfiling:              deep,
@@ -366,6 +434,7 @@ func (p *PerfService) Status() Status {
 		DeepProfilerSupported:      hs.DeepProfilerSupported,
 		ManagedCallstacksSupported: hs.ManagedCallstacksSupported,
 		LastError:                  lastErr,
+		Reconnecting:               reconnecting,
 		HasRaw:                     p.session.RawLen() > 0,
 	}
 }
@@ -455,31 +524,19 @@ func (p *PerfService) FrameHierarchy(index int) []protocol.SampleNode {
 	return h
 }
 
-// ExportCapture 将当前会话的原始 Profiler 数据流导出为 .upac 文件。
+// ExportCapture 不再生成自定义 UPAC 容器。
+// Unity Editor 的 .data 是其私有的已解码离线帧格式，不能通过重命名或封装
+// PlayerConnection 的 PD3U 原始流生成。为避免输出无法被 Unity 打开的伪 .data，
+// 当前不支持从实时采集导出；请在 Unity Editor 中保存该格式。
 func (p *PerfService) ExportCapture(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return errors.New("导出路径为空")
 	}
-	hs, _ := p.client.Handshake()
-	p.mu.Lock()
-	if hs == (protocol.Handshake{}) {
-		hs = p.loadedHS
-	}
-	p.mu.Unlock()
-	raw := p.session.Raw()
-	if len(raw) == 0 {
-		return errors.New("没有可导出的原始 Profiler 数据")
-	}
-	if err := capture.SaveFile(path, capture.File{Handshake: hs, Raw: raw}); err != nil {
-		return fmt.Errorf("无法保存存档：%w", err)
-	}
-	p.logf("已导出 %d 个原始数据块 -> %s", len(raw), path)
-	return nil
+	return errors.New("无法从 PD3U 实时流生成官方 Unity Profiler .data；请在 Unity Editor 中保存")
 }
 
-// ImportCapture 加载存档并按当前解码器重新分析。
-// v2 文件重放原始 Profiler 流；v1 旧文件仅还原已解码帧（无 Hierarchy）。
+// ImportCapture 加载 Unity 2022 Editor Profiler 保存的 .data 文件。
+// 离线 .data 帧体与实时 PD3U 流不同，因此不会重放或伪造原始流。
 // 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
 func (p *PerfService) ImportCapture(path string) (int, error) {
 	path = strings.TrimSpace(path)
@@ -493,22 +550,11 @@ func (p *PerfService) ImportCapture(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取存档：%w", err)
 	}
-	if len(file.Raw) > 0 {
-		frames, hiers, err := unityprofiler.ReplayWithProgress(file.Raw, func(done, total int) {
-			p.emitImportProgress(fileName, "parse", done, total, false, &last)
-		})
-		if err != nil {
-			return 0, fmt.Errorf("解析存档失败：%w", err)
-		}
-		p.emitImportProgress(fileName, "parse", len(file.Raw), len(file.Raw), true, &last)
-		p.session.ReplaceDetail(frames, hiers)
-		p.session.SetRaw(file.Raw)
-	} else if len(file.Frames) > 0 {
-		p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
-		p.session.Replace(file.Frames)
-	} else {
-		return 0, errors.New("存档没有可解析的 Profiler 数据")
+	if len(file.Frames) == 0 {
+		return 0, errors.New("Profiler .data 没有可解析的帧")
 	}
+	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
+	p.session.ReplaceDetail(file.Frames, file.Hierarchies)
 	connected := p.client.Connected()
 	p.mu.Lock()
 	p.sourceFile = path
@@ -665,17 +711,117 @@ func (p *PerfService) onRaw(body []byte) {
 
 func (p *PerfService) onClosed(err error) {
 	p.mu.Lock()
-	p.lastErr = ""
-	if err != nil {
+	want := p.wantLive
+	if !want {
+		p.lastErr = ""
+		if err != nil {
+			p.lastErr = strings.TrimPrefix(err.Error(), "unityprofiler: ")
+		}
+		p.mu.Unlock()
+		if err != nil {
+			p.logf("采集连接关闭: %v", err)
+		} else {
+			p.logf("采集连接关闭")
+		}
+		p.notifyUI()
+		return
+	}
+	if err == nil {
+		// 本端 Close（重连前清理）。用户点断开时 wantLive 已是 false。
+		p.mu.Unlock()
+		return
+	}
+	if !unityprofiler.IsLostConnection(err) {
+		p.wantLive = false
+		p.reconnecting = false
+		p.stopReconnectLocked()
 		p.lastErr = strings.TrimPrefix(err.Error(), "unityprofiler: ")
-	}
-	p.mu.Unlock()
-	if err != nil {
+		p.mu.Unlock()
 		p.logf("采集连接关闭: %v", err)
-	} else {
-		p.logf("采集连接关闭")
+		p.notifyUI()
+		return
 	}
+	if p.reconnecting {
+		p.mu.Unlock()
+		p.logf("采集连接中断（%v），继续等待游戏恢复", err)
+		p.notifyUI()
+		return
+	}
+	p.reconnecting = true
+	p.lastErr = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	p.reconnectCancel = cancel
+	p.mu.Unlock()
+	p.logf("采集连接被游戏断开（%v），等待回到前台后自动重连", err)
 	p.notifyUI()
+	go p.reconnectLoop(ctx)
+}
+
+func (p *PerfService) stopReconnectLocked() {
+	if p.reconnectCancel != nil {
+		p.reconnectCancel()
+		p.reconnectCancel = nil
+	}
+}
+
+func (p *PerfService) reconnectLoop(ctx context.Context) {
+	defer func() {
+		p.mu.Lock()
+		if ctx.Err() != nil {
+			p.reconnecting = false
+		}
+		p.mu.Unlock()
+		p.notifyUI()
+	}()
+	logged := false
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		p.mu.Lock()
+		if !p.wantLive || p.client.Connected() {
+			p.reconnecting = false
+			p.mu.Unlock()
+			return
+		}
+		kind, serial, pkg := p.liveKind, p.usbSerial, p.usbPackage
+		host, port := p.liveHost, p.livePort
+		interval := reconnectInterval
+		p.mu.Unlock()
+
+		p.client.Close()
+		var err error
+		if kind == "adb" {
+			_, err = p.dialUSB(serial, pkg, false)
+		} else {
+			_, err = p.connectTCP(host, port, kind, false)
+		}
+		if err == nil {
+			p.logf("已恢复采集连接")
+			return
+		}
+		if unityprofiler.IsPlayerReject(err) {
+			p.mu.Lock()
+			p.wantLive = false
+			p.reconnecting = false
+			p.lastErr = strings.TrimPrefix(err.Error(), "unityprofiler: ")
+			p.mu.Unlock()
+			p.logf("自动重连失败（Player 拒绝）: %v", err)
+			p.notifyUI()
+			return
+		}
+		if !logged {
+			p.logf("等待游戏恢复采集: %v", err)
+			logged = true
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func importPercent(done, total int) int {

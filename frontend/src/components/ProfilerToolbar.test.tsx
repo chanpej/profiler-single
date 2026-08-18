@@ -22,7 +22,7 @@ function renderBar(over: Partial<Parameters<typeof ProfilerToolbar>[0]> = {}) {
       onCurrent={noop}
       onToggleRecord={noop}
       onPause={noop}
-      onExport={noop}
+
       onImport={noop}
       {...over}
     />,
@@ -32,7 +32,7 @@ function renderBar(over: Partial<Parameters<typeof ProfilerToolbar>[0]> = {}) {
 describe('ProfilerToolbar', () => {
   it('展示 Unity 风格 CPU / FPS / GC', () => {
     renderBar();
-    expect(screen.getByText(/CPU 16.4ms/)).toBeInTheDocument();
+    expect(screen.getByText(/CPU 16.40ms/)).toBeInTheDocument();
     expect(screen.getByText(/59.9 FPS/)).toBeInTheDocument();
     expect(screen.getByText(/GC 12.5 KB/)).toBeInTheDocument();
   });
@@ -43,25 +43,30 @@ describe('ProfilerToolbar', () => {
     expect(screen.getByRole('button', { name: '未采集' })).toBeInTheDocument();
   });
 
-  it('无数据时禁用 Save，并用图标表示无选中帧', () => {
+  it('无数据时用图标表示无选中帧', () => {
     renderBar({ total: 0, selectedIndex: 0, frame: null });
-    expect(screen.getByRole('button', { name: '导出数据' })).toBeDisabled();
     expect(screen.getByLabelText('无选中帧')).toBeInTheDocument();
     expect(screen.queryByText('无选中帧')).not.toBeInTheDocument();
   });
 
-  it('Record / Clear / Load / Save / Current 仅显示图标', () => {
+  it('Record / Clear / Load / Current 仅显示图标', () => {
     renderBar();
     expect(screen.queryByText('Record')).not.toBeInTheDocument();
     expect(screen.queryByText('Clear')).not.toBeInTheDocument();
     expect(screen.queryByText('Load')).not.toBeInTheDocument();
-    expect(screen.queryByText('Save')).not.toBeInTheDocument();
+
     expect(screen.queryByText('Current')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '正在采集' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '清空数据' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '加载数据' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '导出数据' })).toBeInTheDocument();
+
     expect(screen.getByRole('button', { name: '最新帧' })).toBeInTheDocument();
+  });
+
+  it('帧号按 Unity Profiler 从 1 计数', () => {
+    renderBar({ selectedIndex: 3, total: 10 });
+    expect(screen.getByLabelText('当前帧')).toHaveValue('4');
+    expect(screen.getByText('/ 10')).toBeInTheDocument();
   });
 
   it('无选中帧时帧号为空且上一帧/下一帧不可用', () => {

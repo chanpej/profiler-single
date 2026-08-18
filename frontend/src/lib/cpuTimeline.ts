@@ -148,11 +148,7 @@ export function timeTicks(win: TimeWindow, plotW: number): TickMark[] {
   return out;
 }
 
-function formatTick(ms: number, step: number): string {
-  const abs = Math.abs(ms);
-  if (step >= 1) return `${ms.toFixed(0)}ms`;
-  if (step >= 0.1) return `${ms.toFixed(1)}ms`;
-  if (abs >= 1) return `${ms.toFixed(2)}ms`;
+function formatTick(ms: number, _step: number): string {
   return `${ms.toFixed(2)}ms`;
 }
 

@@ -67,8 +67,9 @@ var cpuCategoryField = map[string]func(*protocol.FrameData, float32){
 
 // ToFrameData 把一帧快照转换为 UI 使用的 FrameData。
 //
-// 时长优先取 Player 上报的计数器（与 Unity Profiler 显示一致），缺失时回退到
-// 帧边界跨度与主线程根采样时长。
+// CPU Usage 与 Hierarchy 同源：取主线程采样总时长（RootNS）。
+// Render/CPU Total Frame Time 不含加载阻塞等等待，卡顿帧会远小于 Main Thread，
+// 不能拿来画 CPU 模块。FPS 仍按帧边界间隔（真实帧率）。
 func ToFrameData(snap FrameSnapshot) protocol.FrameData {
 	f := protocol.FrameData{
 		FrameIndex:  uint64(snap.Index),
@@ -76,8 +77,15 @@ func ToFrameData(snap FrameSnapshot) protocol.FrameData {
 	}
 
 	frameMs := float32(float64(snap.DurationNS) / nsPerMS)
-	f.CPUTimeMs = pickMs(snap, ctrCPUTotal, frameMs)
-	f.MainThreadMs = pickMs(snap, ctrCPUMain, float32(float64(snap.RootNS)/nsPerMS))
+	rootMs := float32(float64(snap.RootNS) / nsPerMS)
+	f.CPUTimeMs = rootMs
+	if f.CPUTimeMs <= 0 {
+		f.CPUTimeMs = pickMs(snap, ctrCPUTotal, frameMs)
+	}
+	f.MainThreadMs = rootMs
+	if f.MainThreadMs <= 0 {
+		f.MainThreadMs = pickMs(snap, ctrCPUMain, f.CPUTimeMs)
+	}
 	f.RenderMs = pickMs(snap, ctrCPURender, 0)
 	f.GPUTimeMs = pickMs(snap, ctrGPUFrame, 0)
 	if frameMs > 0 {

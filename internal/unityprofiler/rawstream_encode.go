@@ -138,6 +138,15 @@ func (w *RecordWriter) Begin(markerID uint32, ts int64) {
 	w.i64(ts)
 }
 
+// BeginObject 写出带 Unity 对象上下文的采样开始（事件流）。
+// 对象元数据（InstanceID、名字等）作为后续取值记录单独写出。
+func (w *RecordWriter) BeginObject(markerID uint32, ts int64) {
+	w.u8(recBeginObject)
+	w.u16(0)
+	w.u32(markerID)
+	w.i64(ts)
+}
+
 // End 写出采样结束记录（事件流）。
 func (w *RecordWriter) End(markerID uint32, ts int64) {
 	w.u8(recEnd)
@@ -211,6 +220,13 @@ func (w *RecordWriter) counterHead(markerID uint32, ts int64) {
 	w.u32(markerID)
 	w.i64(ts)
 	w.u8(1) // 取值个数
+}
+
+// ThreadClock 写出脚本线程流上的时钟戳（事件流）。
+func (w *RecordWriter) ThreadClock(ts int64) {
+	w.u8(recThreadClock)
+	w.u8(0)
+	w.i64(ts)
 }
 
 // EncodeStreamHeader 生成 56 字节流头。

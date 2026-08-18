@@ -37,7 +37,7 @@ interface Props {
   onClear: () => void;
   onToggleRecord: () => void;
   onPause: () => void;
-  onExport: () => void;
+
   onImport: () => void;
   onDeepProfiling?: (on: boolean) => void;
   onCallStacks?: (on: boolean) => void;
@@ -54,7 +54,7 @@ const initialVp: Viewport = {
 export function ProfilerView({
   frames, totalCount, fetchRange, getFrame, getHierarchy, recording, connected,
   deepProfiling = false, callStacks = false,
-  onClear, onToggleRecord, onPause, onExport, onImport, onDeepProfiling, onCallStacks,
+  onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks,
 }: Props) {
   const [enabled, setEnabled] = useState<ProfilerModuleId[]>(DEFAULT_ENABLED);
   const [active, setActive] = useState<ProfilerModuleId>('cpu');
@@ -245,7 +245,7 @@ export function ProfilerView({
         onCurrent={() => apply(goCurrent(windowed, total))}
         onToggleRecord={onToggleRecord}
         onPause={onPause}
-        onExport={onExport}
+
         onImport={onImport}
         deepProfiling={deepProfiling}
         callStacks={callStacks}
@@ -304,7 +304,7 @@ export function ProfilerView({
           onChange={(e) => apply(setViewportStart(windowed, total, Number.parseInt(e.target.value, 10)))}
         />
         <span className="mono dim profiler-scroll-meta" data-testid="profiler-range">
-          {total === 0 ? '无帧' : `${windowed.start}–${viewEnd} · ${windowed.visible}帧`}
+          {total === 0 ? '无帧' : `${windowed.start + 1}–${viewEnd + 1} · ${windowed.visible}帧`}
         </span>
       </div>
       <div className="profiler-detail-wrap" style={{ height: detailH }} data-testid="profiler-detail-wrap">

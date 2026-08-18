@@ -2,10 +2,13 @@ package unityprofiler
 
 import (
 	"errors"
+
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"unityperfagent/internal/protocol"
 )
 
 func TestReplayRebuildsHierarchyFromRaw(t *testing.T) {
@@ -100,31 +103,88 @@ func TestRawHandlerReceivesProfilerBodies(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
+	var chunks [][]byte
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		n := len(raw)
+		chunks = append([][]byte(nil), raw...)
 		mu.Unlock()
-		if n >= 3 {
-			break
+		if frames, hiers, err := Replay(chunks); err == nil && len(frames) > 0 {
+			sess.Close()
+			if len(hiers) != len(frames) {
+				t.Fatalf("frames=%d hierarchies=%d", len(frames), len(hiers))
+			}
+			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	sess.Close()
-
-	mu.Lock()
-	chunks := append([][]byte(nil), raw...)
-	mu.Unlock()
 	if len(chunks) == 0 {
 		t.Fatal("raw handler received no profiler bodies")
 	}
-	frames, hiers, err := Replay(chunks)
+	_, _, err = Replay(chunks)
+	t.Fatalf("Replay: %v", err)
+}
+
+func TestSessionSurvivesPlayerPause(t *testing.T) {
+	old := readIdleTimeout
+	readIdleTimeout = 80 * time.Millisecond
+	defer func() { readIdleTimeout = old }()
+
+	p := NewPlayer()
+	p.Interval = 10 * time.Millisecond
+	port, err := p.Start()
 	if err != nil {
-		t.Fatalf("Replay: %v", err)
+		t.Fatal(err)
 	}
-	if len(frames) == 0 {
-		t.Fatalf("replay of captured raw produced 0 frames from %d chunks", len(chunks))
+	defer p.Stop()
+
+	var mu sync.Mutex
+	var n int
+	closed := make(chan error, 1)
+	sess := NewSession()
+	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, _ []protocol.SampleNode) {
+		mu.Lock()
+		n++
+		mu.Unlock()
+	}, func(err error) { closed <- err }); err != nil {
+		t.Fatal(err)
 	}
-	if len(hiers) != len(frames) {
-		t.Fatalf("frames=%d hierarchies=%d", len(frames), len(hiers))
+	defer sess.Close()
+
+	waitFrames := func(min int, d time.Duration) int {
+		deadline := time.Now().Add(d)
+		for time.Now().Before(deadline) {
+			mu.Lock()
+			got := n
+			mu.Unlock()
+			if got >= min {
+				return got
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return n
+	}
+	before := waitFrames(3, time.Second)
+	if before < 3 {
+		t.Fatalf("暂停前只收到 %d 帧", before)
+	}
+
+	p.SetPaused(true)
+	time.Sleep(5 * readIdleTimeout) // 超过多次读等待，旧逻辑会在这里断开
+	if !sess.Connected() {
+		t.Fatal("Player 暂停上报后会话不应断开")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("暂停期间不应关闭: %v", err)
+	default:
+	}
+
+	p.SetPaused(false)
+	after := waitFrames(before+3, time.Second)
+	if after < before+3 {
+		t.Fatalf("恢复后应继续出帧: pause前=%d 之后=%d", before, after)
 	}
 }

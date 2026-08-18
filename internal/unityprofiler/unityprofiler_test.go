@@ -44,6 +44,11 @@ const (
 	captureAllocCallstackHex = "2a00008f04000064aa558f5c630000020408000000000000000204000000240000ce0400006dac558f5c630000250000ce040000b519598f5c63000003000000000019c4a8f37f72000000ccbed77f72000000fc739f7f72000000f4729f7f72000000ec24d3fe710000006823d3fe71000000fcd7c5f77100000034d4c5f7710000004875b5f771000000e864b5f7710000009c5eb5f771000000e0170eff710000001c170eff71000000f05cde7f72000000a083df7f7200000024d4e07f720000008c94b77f720000001c94b77f72000000900cc67f72000000b837c57f72000000f837c57f72000000f83ac57f72000000d0fceb7f72000000d035ee7f720000003c216bac720000002500008f040000fb29598f5c630000"
 	// 采样自带的 3 个元数据取值（instanceID + UTF-16 名字 + 计数），首字节同为 0x03。
 	captureSampleMeta3Hex = "030100000000091a00000055007000640061007400650057006900640067006500740073000301000000"
+	// 带 Unity 对象上下文的采样开始（0x2b）+ 4 个取值（InstanceID、对象名 SFX_Weapon_Empty、Int32、Int64）。
+	// 截自 Android 真机 Unity 2022.3.47f1 主线程流；未识别时会让整段采集失步。
+	captureBeginObjectHex = "2b0000450400004c944ba90843010004016e1a000008100000005346585f576561706f6e5f456d70747902420c0000040100000000000000"
+	// 脚本线程时钟戳（0x38）：type + pad + int64。截自切后台时 Scripting Threads/#0 的整条流。
+	captureThreadClockHex = "3800ab3dbc7fa4430100"
 )
 
 // captureMainThreadID 是流头与线程定义里一致的主线程 ID。
@@ -465,7 +470,8 @@ func TestToFrameDataMapsCounters(t *testing.T) {
 	if f.FrameIndex != 9 {
 		t.Fatalf("frameIndex=%d", f.FrameIndex)
 	}
-	if math.Abs(float64(f.CPUTimeMs)-16.6) > 0.001 {
+	// CPU Usage 跟 Hierarchy：用主线程采样 18ms，不用 Render 计数器 16.6ms。
+	if math.Abs(float64(f.CPUTimeMs)-18) > 0.001 {
 		t.Fatalf("cpu=%v", f.CPUTimeMs)
 	}
 	if math.Abs(float64(f.GPUTimeMs)-11) > 0.001 {
@@ -496,6 +502,40 @@ func TestToFrameDataMapsCounters(t *testing.T) {
 	// Internal 不属于图表分段，应计入 Others。
 	if math.Abs(float64(f.CPUOthersMs)-7) > 0.001 {
 		t.Fatalf("others=%v", f.CPUOthersMs)
+	}
+}
+
+// 资源预加载会把主线程卡住一整帧，但 Render/CPU Total Frame Time 只统计忙碌时间。
+// CPU 模块必须跟 Hierarchy 的 Main Thread，否则顶栏 20ms、树里却是 258ms。
+func TestToFrameDataCPUUsageMatchesMainThreadWhenWaiting(t *testing.T) {
+	snap := FrameSnapshot{
+		Index:      29,
+		DurationNS: 256_000_000,
+		RootNS:     258_200_000,
+		CategoryNS: map[string]int64{
+			"Render":    3_100_000,
+			"Scripts":   4_400_000,
+			"Physics":   1_400_000,
+			"Animation": 700_000,
+		},
+		Counters: map[string]float64{
+			ctrCPUTotal: 20_800_000,
+			ctrCPUMain:  20_800_000,
+		},
+	}
+	f := ToFrameData(snap)
+	if math.Abs(float64(f.CPUTimeMs)-258.2) > 0.05 {
+		t.Fatalf("cpu=%v，应等于 Main Thread 258.2ms", f.CPUTimeMs)
+	}
+	if math.Abs(float64(f.MainThreadMs)-258.2) > 0.05 {
+		t.Fatalf("mainThread=%v", f.MainThreadMs)
+	}
+	if math.Abs(float64(f.FPS)-1000.0/256.0) > 0.05 {
+		t.Fatalf("fps=%v", f.FPS)
+	}
+	wantOthers := 258.2 - 3.1 - 4.4 - 1.4 - 0.7
+	if math.Abs(float64(f.CPUOthersMs)-wantOthers) > 0.05 {
+		t.Fatalf("others=%v，期望 %v", f.CPUOthersMs, wantOthers)
 	}
 }
 
@@ -703,6 +743,107 @@ func TestDecoderKeepsTimelineStartTimes(t *testing.T) {
 	}
 }
 
+// Main Thread 在真机上会跨过帧边界仍保持打开。切帧时必须把未闭合采样写入当前帧，
+// 否则 Hierarchy 只在栈弹空的那几帧有数据，卡顿帧只剩分类汇总。
+func TestDecoderSnapshotsOpenSamplesAtFrameBoundary(t *testing.T) {
+	var snaps []FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snaps = append(snaps, f) })
+	if err := d.Feed(EncodeStreamHeader(StreamHeader{
+		FormatVersion: Unity2022StreamVersion, MainThreadID: captureMainThreadID,
+	}, 2022, 3, 47, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catScripts, "Scripts")
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkScripts, 0, catScripts, "BehaviourUpdate")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	const ns = int64(1_000_000)
+	var ev RecordWriter
+	ev.FrameBoundary(1, 0)
+	ev.Begin(mkMainThread, 0)
+	ev.Begin(mkScripts, 2*ns)
+	ev.End(mkScripts, 4*ns)
+	ev.Begin(mkScripts, 5*ns)
+	ev.FrameBoundary(2, 10*ns)
+	ev.End(mkScripts, 13*ns)
+	ev.End(mkMainThread, 20*ns)
+	ev.FrameBoundary(3, 20*ns)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Fatalf("frames=%d，期望 2", len(snaps))
+	}
+
+	root := findSample(snaps[0].Hierarchy, "Main Thread")
+	if root == nil {
+		t.Fatalf("第 1 帧缺少 Main Thread: %+v", snaps[0].Hierarchy)
+	}
+	if math.Abs(float64(root.TotalMs)-10) > 0.001 {
+		t.Fatalf("第 1 帧 Main Thread total=%v", root.TotalMs)
+	}
+	if len(root.Children) != 2 {
+		t.Fatalf("第 1 帧应保留已闭合与跨帧采样，实际 %d: %+v", len(root.Children), root.Children)
+	}
+	if math.Abs(float64(root.Children[0].TotalMs)-2) > 0.001 {
+		t.Fatalf("已闭合 BehaviourUpdate total=%v", root.Children[0].TotalMs)
+	}
+	if math.Abs(float64(root.Children[1].TotalMs)-5) > 0.001 {
+		t.Fatalf("跨帧 BehaviourUpdate 第 1 帧 total=%v", root.Children[1].TotalMs)
+	}
+	if snaps[0].RootNS != 10*ns {
+		t.Fatalf("第 1 帧 RootNS=%d", snaps[0].RootNS)
+	}
+	if snaps[0].CategoryNS["Scripts"] != 7*ns {
+		t.Fatalf("第 1 帧 Scripts=%d", snaps[0].CategoryNS["Scripts"])
+	}
+
+	root2 := findSample(snaps[1].Hierarchy, "Main Thread")
+	if root2 == nil {
+		t.Fatalf("第 2 帧缺少 Main Thread: %+v", snaps[1].Hierarchy)
+	}
+	if math.Abs(float64(root2.TotalMs)-10) > 0.001 {
+		t.Fatalf("第 2 帧 Main Thread total=%v", root2.TotalMs)
+	}
+	open := findSample(snaps[1].Hierarchy, "BehaviourUpdate")
+	if open == nil {
+		t.Fatalf("第 2 帧缺少 BehaviourUpdate: %+v", snaps[1].Hierarchy)
+	}
+	if math.Abs(float64(open.TotalMs)-3) > 0.001 {
+		t.Fatalf("跨帧 BehaviourUpdate 第 2 帧 total=%v", open.TotalMs)
+	}
+	if snaps[1].CategoryNS["Scripts"] != 3*ns {
+		t.Fatalf("第 2 帧 Scripts=%d", snaps[1].CategoryNS["Scripts"])
+	}
+}
+
+func TestDecoderAcceptsThreadDefOnEventStream(t *testing.T) {
+	d := NewDecoder(nil)
+	if err := d.Feed(EncodeStreamHeader(StreamHeader{
+		FormatVersion: Unity2022StreamVersion, MainThreadID: captureMainThreadID,
+	}, 2022, 3, 47, 2, 1)); err != nil {
+		t.Fatal(err)
+	}
+	const workerID int64 = 0x1111
+	var ev RecordWriter
+	ev.ThreadDef(workerID, 0, "Job", "Worker")
+	if err := d.Feed(EncodeChunk(0, workerID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	st := d.Stats()
+	if st.Desynced || st.DesyncedThreads != 0 {
+		t.Fatalf("事件流线程定义不应失步: %+v", st)
+	}
+	if got := d.ThreadNames()[workerID]; got != "Job/Worker" {
+		t.Fatalf("thread name=%q", got)
+	}
+}
+
 // 用真机字节验证 Call Stacks：调用栈记录（0x03 后跟 0x00）与"3 个元数据取值"
 // 记录（同为 0x03）撞号，必须各自解对，否则事件流会失步、整条流不再出帧。
 func TestDecodeCaptureCallstack(t *testing.T) {
@@ -766,6 +907,164 @@ func TestDecodeCaptureCallstack(t *testing.T) {
 	// 方法表覆盖不到的引擎原生帧保留地址。
 	if got := alloc.Callstack[0]; got != "0x727ff3a8c4" {
 		t.Fatalf("原生帧应保留地址: %q", got)
+	}
+}
+
+// 真机主线程会出现 0x2b（带 Unity 对象上下文的 Begin）。头部与 0x24/0x2a 同布局，
+// 随后是取值记录；当成未知类型会让主线程流失步、采集停掉。
+func TestDecodeCaptureBeginObject(t *testing.T) {
+	const mkObject uint32 = 0x445 // 固件里那条 0x2b 的 marker ID
+	const (
+		objectStartNS = int64(0x14308a94b944c)
+		objectEndNS   = objectStartNS + 1000
+	)
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkObject, 0, catInternal, "Audio.Play")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	var ev RecordWriter
+	ev.FrameBoundary(1, objectStartNS-1000)
+	ev.Begin(mkMainThread, objectStartNS-1000)
+	ev.buf = append(ev.buf, mustHex(t, captureBeginObjectHex)...)
+	ev.End(mkObject, objectEndNS)
+	ev.End(mkMainThread, objectEndNS+1000)
+	ev.FrameBoundary(2, objectEndNS+1000)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.Stats(); st.Desynced || st.LastError != "" {
+		t.Fatalf("0x2b 真机字节不应失步: %+v", st)
+	}
+	if snap == nil {
+		t.Fatal("未解出帧")
+	}
+	obj := findSample(snap.Hierarchy, "Audio.Play")
+	if obj == nil {
+		t.Fatalf("缺少对象采样: %+v", snap.Hierarchy)
+	}
+}
+
+func TestDecoderBeginObjectRoundTrip(t *testing.T) {
+	const mkObject uint32 = 2001
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.MarkerDef(mkObject, 0, catInternal, "VFX.Play")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	var ev RecordWriter
+	ev.FrameBoundary(1, 0)
+	ev.Begin(mkMainThread, 0)
+	ev.BeginObject(mkObject, 100)
+	ev.StringMeta("SFX_Weapon_Empty")
+	ev.End(mkObject, 200)
+	ev.End(mkMainThread, 1000)
+	ev.FrameBoundary(2, 1000)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.Stats(); st.Desynced {
+		t.Fatalf("BeginObject 往返失步: %+v", st)
+	}
+	if snap == nil || findSample(snap.Hierarchy, "VFX.Play") == nil {
+		t.Fatalf("缺少 VFX.Play: %+v", snap)
+	}
+}
+
+// 真机 Scripting Threads 在 App 切后台时会发 0x38 时钟戳。未识别会放弃那条线程；
+// 若落在主线程上更会让整段采集失步。
+func TestDecodeCaptureThreadClock(t *testing.T) {
+	const scriptTID int64 = 0x729718bd50
+	const ctrID uint32 = 910
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catRender, "Render")
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	meta.CounterDef(ctrID, catRender, "Draw Calls Count", DataTypeInt32, UnitCount)
+	meta.ThreadDef(scriptTID, 0, "Scripting Threads", "#0")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	var main RecordWriter
+	main.FrameBoundary(1, 1_000_000)
+	main.Begin(mkMainThread, 1_000_000)
+	main.End(mkMainThread, 2_000_000)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, main.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	var script RecordWriter
+	script.buf = append(script.buf, mustHex(t, captureThreadClockHex)...)
+	script.CounterInt32(ctrID, 1_500_000, 42)
+	if err := d.Feed(EncodeChunk(0, scriptTID, script.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	main.Reset()
+	main.FrameBoundary(2, 3_000_000)
+	if err := d.Feed(EncodeChunk(1, captureMainThreadID, main.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	if st := d.Stats(); st.Desynced || st.DesyncedThreads != 0 || st.UnknownRecords["0x38"] != 0 {
+		t.Fatalf("0x38 不应失步: %+v", st)
+	}
+	if snap == nil {
+		t.Fatal("未解出帧")
+	}
+	if v := snap.Counters["Render/Draw Calls Count"]; v != 42 {
+		t.Fatalf("时钟戳之后的计数器应仍能并入当前帧: %v", snap.Counters)
+	}
+}
+
+func TestDecoderThreadClockOnMainThread(t *testing.T) {
+	var snap *FrameSnapshot
+	d := NewDecoder(func(f FrameSnapshot) { snap = &f })
+	if err := d.Feed(mustHex(t, captureStreamHeaderHex)); err != nil {
+		t.Fatal(err)
+	}
+	var meta RecordWriter
+	meta.CategoryDef(catInternal, "Internal")
+	meta.MarkerDef(mkMainThread, 0x08, catInternal, "Main Thread")
+	if err := d.Feed(EncodeChunk(0, metaThreadID, meta.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	var ev RecordWriter
+	ev.FrameBoundary(1, 0)
+	ev.ThreadClock(100)
+	ev.Begin(mkMainThread, 0)
+	ev.End(mkMainThread, 1000)
+	ev.FrameBoundary(2, 1000)
+	if err := d.Feed(EncodeChunk(0, captureMainThreadID, ev.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+	if st := d.Stats(); st.Desynced || st.LastError != "" {
+		t.Fatalf("主线程 0x38 不应失步: %+v", st)
+	}
+	if snap == nil || findSample(snap.Hierarchy, "Main Thread") == nil {
+		t.Fatalf("缺少 Main Thread: %+v", snap)
 	}
 }
 
@@ -1016,4 +1315,16 @@ func TestSessionDeepProfileAndCallStacks(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("超时未收到 Deep Profile / Call Stacks 采样")
+}
+
+func TestIsLostConnection(t *testing.T) {
+	if IsLostConnection(nil) || IsLostConnection(errors.New("解析失步")) {
+		t.Fatal("nil / 失步不应算连接丢失")
+	}
+	if !IsLostConnection(io.EOF) || !IsLostConnection(io.ErrUnexpectedEOF) {
+		t.Fatal("EOF 应算连接丢失")
+	}
+	if !IsLostConnection(errors.New("read tcp 127.0.0.1:1: wsarecv: An existing connection was forcibly closed by the remote host.")) {
+		t.Fatal("Windows RST 应算连接丢失")
+	}
 }

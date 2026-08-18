@@ -138,7 +138,9 @@ const (
 	recEnd          = 0x25
 	recBeginExtra   = 0x27
 	recBeginMeta    = 0x2A
+	recBeginObject  = 0x2B // 带 Unity 对象上下文的 Begin（随后跟 InstanceID、对象名等取值），布局同 0x24/0x2A
 	recCounter      = 0x2C
+	recThreadClock  = 0x38 // 脚本线程时钟戳（pad + int64），Android 切后台时 Scripting Threads 会单独发
 	recInstanceHint = 0x39
 	recLegacyStats  = 0x04
 	recAudioStats   = 0x05
@@ -602,16 +604,7 @@ func (d *Decoder) decodeMetaRecord(_ *threadStream, c *cursor) error {
 		c.u16() // flags
 		d.meta.categories[id] = c.str()
 	case recMetaThread:
-		c.u8()
-		tid := c.i64()
-		c.i64() // 起始时间戳
-		c.u32()
-		group := c.str()
-		name := c.str()
-		if group != "" {
-			name = group + "/" + name
-		}
-		d.meta.threads[tid] = name
+		d.parseThreadDef(c)
 	case recMetaClass:
 		c.u8()
 		c.i32()
@@ -658,9 +651,12 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 		ts := c.i64()
 		// 每条线程流都有帧记录，但只让主线程划定帧边界，否则一帧会被切成多段。
 		if st.isMain {
-			d.rollFrame(index, ts)
+			d.rollFrame(index, ts, st)
 		}
-	case recBeginPlain, recBeginExtra, recBeginMeta:
+	case recMetaThread:
+		// 工作线程也会在事件流里再发一遍线程定义（与元数据流同布局）。
+		d.parseThreadDef(c)
+	case recBeginPlain, recBeginExtra, recBeginMeta, recBeginObject:
 		c.u16()
 		id := c.u32()
 		ts := c.i64()
@@ -691,6 +687,9 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 	case recInstanceHint:
 		c.u16()
 		c.u32()
+	case recThreadClock:
+		c.u8()
+		c.i64()
 	case recCallstack:
 		// 与元数据取值列表撞号：调用栈记录第二个字节固定为 0，而取值类型不会是 0（None）。
 		if !c.hasMore() || c.peek() != 0x00 {
@@ -736,6 +735,19 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 	}
 	d.stats.EventRecords++
 	return nil
+}
+
+func (d *Decoder) parseThreadDef(c *cursor) {
+	c.u8()
+	tid := c.i64()
+	c.i64() // 起始时间戳
+	c.u32()
+	group := c.str()
+	name := c.str()
+	if group != "" {
+		name = group + "/" + name
+	}
+	d.meta.threads[tid] = name
 }
 
 // attachMeta 把元数据取值挂到当前打开的采样上。
@@ -784,9 +796,14 @@ func (d *Decoder) closeSample(st *threadStream, endNS int64) {
 	}
 }
 
+// maxOpenSnapshotDepth 限制跨帧未闭合采样链写入 Hierarchy 的层数。
+// 卡顿帧上未配对的 Begin 可能堆到上万层，全量展开会撑爆递归与 UI。
+const maxOpenSnapshotDepth = 64
+
 // rollFrame 收尾上一帧并开启新帧。
-func (d *Decoder) rollFrame(index uint32, ts int64) {
+func (d *Decoder) rollFrame(index uint32, ts int64, st *threadStream) {
 	if prev := d.frame; prev != nil {
+		d.flushOpenSamples(st, prev, ts)
 		prev.emit(d, ts)
 	}
 	d.frame = &frameAccum{
@@ -795,6 +812,84 @@ func (d *Decoder) rollFrame(index uint32, ts int64) {
 		categoryNS: make(map[uint16]int64),
 		counters:   make(map[uint32]float64),
 	}
+}
+
+// flushOpenSamples 在帧边界把仍未 End 的主线程采样写入当前帧 Hierarchy。
+// Unity 的 Main Thread / PlayerLoop 会跨帧保持打开：只在栈弹空时才记 roots 的话，
+// 卡顿帧只会留下分类自耗时，Hierarchy 是空的。
+func (d *Decoder) flushOpenSamples(st *threadStream, frame *frameAccum, endNS int64) {
+	if st == nil || !st.isMain || len(st.stack) == 0 || frame == nil {
+		return
+	}
+	root := d.snapshotOpenStack(st.stack, frame, endNS)
+	if root == nil {
+		return
+	}
+	frame.roots = append(frame.roots, root)
+	if root.totalNS > frame.rootNS {
+		frame.rootNS = root.totalNS
+	}
+	for i := range st.stack {
+		st.stack[i].startNS = endNS
+		st.stack[i].childNS = 0
+		st.stack[i].kids = nil
+		st.stack[i].meta = nil
+		st.stack[i].callstack = nil
+	}
+}
+
+func (d *Decoder) snapshotOpenStack(stack []sampleEntry, frame *frameAccum, endNS int64) *treeNode {
+	limit := len(stack)
+	if limit > maxOpenSnapshotDepth {
+		limit = maxOpenSnapshotDepth
+	}
+	var inner *treeNode
+	for i := limit - 1; i >= 0; i-- {
+		e := stack[i]
+		start := e.startNS
+		if frame.startNS != 0 && start < frame.startNS {
+			start = frame.startNS
+		}
+		dur := endNS - start
+		if dur < 0 {
+			dur = 0
+		}
+		openChildNS := int64(0)
+		if inner != nil {
+			openChildNS = inner.totalNS
+		} else if i == limit-1 && len(stack) > limit {
+			nextStart := stack[limit].startNS
+			if frame.startNS != 0 && nextStart < frame.startNS {
+				nextStart = frame.startNS
+			}
+			openChildNS = endNS - nextStart
+			if openChildNS < 0 {
+				openChildNS = 0
+			}
+		}
+		self := dur - e.childNS - openChildNS
+		if self < 0 {
+			self = 0
+		}
+		if info, ok := d.meta.markers[e.markerID]; ok {
+			frame.categoryNS[info.Category] += self
+		}
+		kids := make([]*treeNode, len(e.kids), len(e.kids)+1)
+		copy(kids, e.kids)
+		if inner != nil {
+			kids = append(kids, inner)
+		}
+		inner = &treeNode{
+			markerID:  e.markerID,
+			startNS:   start,
+			totalNS:   dur,
+			selfNS:    self,
+			kids:      kids,
+			meta:      cloneValues(e.meta),
+			callstack: cloneAddrs(e.callstack),
+		}
+	}
+	return inner
 }
 
 func (a *frameAccum) emit(d *Decoder, endNS int64) {

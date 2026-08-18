@@ -7,7 +7,7 @@ function renderBar(over: Partial<Parameters<typeof MenuBar>[0]> = {}) {
   return render(
     <MenuBar
       onImport={vi.fn()}
-      onExport={vi.fn()}
+
       onClear={vi.fn()}
       onFrames={vi.fn()}
       onAnalysis={vi.fn()}
@@ -27,29 +27,20 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: '设置' })).toBeInTheDocument();
   });
 
-  it('文件菜单触发加载 / 导出 / 清空', async () => {
+  it('文件菜单触发加载 / 清空', async () => {
     const onImport = vi.fn();
-    const onExport = vi.fn();
     const onClear = vi.fn();
-    renderBar({ onImport, onExport, onClear });
+    renderBar({ onImport, onClear });
     await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '加载数据' }));
     expect(onImport).toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: '导出数据' }));
-    expect(onExport).toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '清空数据' }));
     expect(onClear).toHaveBeenCalled();
   });
 
-  it('无数据时禁用导出', async () => {
-    renderBar({ canSave: false });
-    await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
-    expect(screen.getByRole('menuitem', { name: '导出数据' })).toBeDisabled();
-  });
 
   it('视图菜单打开帧数据', async () => {
     const onFrames = vi.fn();

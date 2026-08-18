@@ -3,9 +3,9 @@ import { clampPercent, fileBaseName, importProgressLabel, initialImportProgress 
 
 describe('importProgress', () => {
   it('提取 Windows / POSIX 文件名', () => {
-    expect(fileBaseName('D:\\captures\\boss.upac')).toBe('boss.upac');
-    expect(fileBaseName('/tmp/session.upac')).toBe('session.upac');
-    expect(fileBaseName('plain.upac')).toBe('plain.upac');
+    expect(fileBaseName('D:\\captures\\boss.data')).toBe('boss.data');
+    expect(fileBaseName('/tmp/session.data')).toBe('session.data');
+    expect(fileBaseName('plain.data')).toBe('plain.data');
   });
 
   it('百分比夹紧到 0..100', () => {
@@ -21,8 +21,8 @@ describe('importProgress', () => {
   });
 
   it('加载开始时进度为 0', () => {
-    const p = initialImportProgress('C:\\data\\fight.upac');
-    expect(p.fileName).toBe('fight.upac');
+    const p = initialImportProgress('C:\\data\\fight.data');
+    expect(p.fileName).toBe('fight.data');
     expect(p.phase).toBe('read');
     expect(p.percent).toBe(0);
   });

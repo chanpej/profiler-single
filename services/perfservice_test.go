@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
-	"unityperfagent/internal/capture"
 	"unityperfagent/internal/llm"
 	"unityperfagent/internal/protocol"
 	"unityperfagent/internal/unityprofiler"
@@ -248,49 +248,45 @@ func TestSetRecordingPausesCapture(t *testing.T) {
 	}
 }
 
-func TestExportImportCapture(t *testing.T) {
+func TestImportOfficialUnityData(t *testing.T) {
+	path := filepath.Join("..", "test", "testdata", "unity-profiler.data")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("official Unity .data fixture is not available")
+	} else if err != nil {
+		t.Fatal(err)
+	}
 	svc := newTestService()
-	raw := unityprofiler.SampleProfilerCapture()
-	for _, c := range raw {
-		svc.session.AppendRaw(c)
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "cap.upac")
-	if err := svc.ExportCapture(""); err == nil {
-		t.Fatal("empty path should fail")
-	}
-	if err := svc.ExportCapture(path); err != nil {
-		t.Fatalf("ExportCapture: %v", err)
-	}
-	svc.Clear()
-	if svc.FrameCount() != 0 {
-		t.Fatal("clear failed")
-	}
 	n, err := svc.ImportCapture(path)
 	if err != nil {
 		t.Fatalf("ImportCapture: %v", err)
 	}
-	if n < 1 {
-		t.Fatalf("imported %d, want at least 1", n)
+	if n != 299 {
+		t.Fatalf("imported %d, want 299", n)
 	}
 	st := svc.Status()
-	if st.SourceFile != path {
-		t.Fatalf("sourceFile = %q", st.SourceFile)
+	if st.SourceFile != path || st.Device.UnityVersion != "2022.3.47f1" {
+		t.Fatalf("status = %+v", st)
 	}
-	got := svc.Frames(0, 10)
-	if len(got) != n || got[0].FrameIndex != 1 {
-		t.Fatalf("frames = %+v", got)
+	frames := svc.Frames(0, 1)
+	if len(frames) != 1 || frames[0].FrameIndex != 1 || frames[0].FPS < 29 || frames[0].FPS > 30 || frames[0].CPUScriptsMs <= 0 {
+		t.Fatalf("frames = %+v", frames)
 	}
-	h := svc.FrameHierarchy(0)
-	if len(h) == 0 || h[0].Name != "Main Thread" {
-		t.Fatalf("replayed hierarchy = %+v", h)
+	hierarchy := svc.FrameHierarchy(0)
+	if len(hierarchy) == 0 || hierarchy[0].Name != "Main Thread" || !hierarchyHas(hierarchy, "PlayerLoop") {
+		t.Fatalf("hierarchy = %+v", hierarchy)
 	}
-	if !hierarchyHas(h, "PlayerController.Update") {
-		t.Fatalf("missing deep profile method: %+v", h)
+	if svc.Status().HasRaw {
+		t.Fatal("official .data must not be treated as a PD3U raw stream")
 	}
-	if !svc.Status().HasRaw {
-		t.Fatal("imported raw stream should remain exportable")
+}
+
+func hierarchyHas(nodes []protocol.SampleNode, name string) bool {
+	for _, node := range nodes {
+		if node.Name == name || hierarchyHas(node.Children, name) {
+			return true
+		}
 	}
+	return false
 }
 
 func TestImportPercent(t *testing.T) {
@@ -309,15 +305,13 @@ func TestImportPercent(t *testing.T) {
 }
 
 func TestImportCaptureEmitsProgress(t *testing.T) {
-	svc := newTestService()
-	raw := unityprofiler.SampleProfilerCapture()
-	for _, c := range raw {
-		svc.session.AppendRaw(c)
-	}
-	path := filepath.Join(t.TempDir(), "cap.upac")
-	if err := svc.ExportCapture(path); err != nil {
+	path := filepath.Join("..", "test", "testdata", "unity-profiler.data")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("official Unity .data fixture is not available")
+	} else if err != nil {
 		t.Fatal(err)
 	}
+	svc := newTestService()
 	var mu sync.Mutex
 	var events []ImportProgressEvent
 	svc.mu.Lock()
@@ -346,160 +340,26 @@ func TestImportCaptureEmitsProgress(t *testing.T) {
 		t.Fatalf("first phase=%s", events[0].Phase)
 	}
 	last := events[len(events)-1]
-	if last.Phase != "parse" || last.Percent != 100 {
+	if last.Phase != "parse" || last.Percent != 100 || last.FileName != "unity-profiler.data" {
 		t.Fatalf("last=%+v", last)
 	}
-	if last.FileName != "cap.upac" {
-		t.Fatalf("fileName=%q", last.FileName)
-	}
 }
 
-func TestImportHeaderlessCaptureFails(t *testing.T) {
-	full := unityprofiler.SampleProfilerCapture()
-	path := filepath.Join(t.TempDir(), "midstream.upac")
-	if err := capture.SaveFile(path, capture.File{
-		Handshake: protocol.Handshake{ProfilerStreamVersion: unityprofiler.Unity2022StreamVersion},
-		Raw:       full[1:],
-	}); err != nil {
+func TestImportUPACFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.upac")
+	if err := os.WriteFile(path, []byte("UPAC"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc := newTestService()
-	svc.session.Append(protocol.FrameData{FrameIndex: 7, FPS: 60})
-	n, err := svc.ImportCapture(path)
-	if err == nil || n != 0 {
-		t.Fatalf("n=%d err=%v, want failure", n, err)
-	}
-	if !strings.Contains(err.Error(), "流头") {
-		t.Fatalf("error should mention missing stream header, got %v", err)
-	}
-	if svc.FrameCount() != 1 || svc.Frames(0, 1)[0].FrameIndex != 7 {
-		t.Fatal("failed import should not replace session")
+	if _, err := svc.ImportCapture(path); err == nil || !strings.Contains(err.Error(), "格式版本") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
-func TestImportRealHeaderlessCaptureFails(t *testing.T) {
-	path := filepath.Join("..", "test", "testdata", "profiler-20260816-102550.upac")
-	if _, err := os.Stat(path); err != nil {
-		t.Skip("local capture not present")
-	}
+func TestExportRejectsPseudoData(t *testing.T) {
 	svc := newTestService()
-	_, err := svc.ImportCapture(path)
-	if err == nil {
-		t.Fatal("headerless capture should fail")
-	}
-	if !strings.Contains(err.Error(), "流头") {
-		t.Fatalf("error should mention missing stream header, got %v", err)
-	}
-}
-
-func TestImportJunkFileFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "junk.upac")
-	if err := os.WriteFile(path, []byte("not a capture"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	svc := newTestService()
-	_, err := svc.ImportCapture(path)
-	if err == nil {
-		t.Fatal("junk file should fail")
-	}
-	if !strings.Contains(err.Error(), "无法读取存档") {
-		t.Fatalf("error should mention read failure, got %v", err)
-	}
-}
-
-func TestImportEmptyArchiveFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "empty.upac")
-	if err := capture.SaveFile(path, capture.File{}); err != nil {
-		t.Fatal(err)
-	}
-	svc := newTestService()
-	_, err := svc.ImportCapture(path)
-	if err == nil {
-		t.Fatal("empty archive should fail")
-	}
-}
-
-func TestExportRequiresRawStream(t *testing.T) {
-	svc := newTestService()
-	svc.session.Append(protocol.FrameData{FrameIndex: 10, FPS: 60, CPUTimeMs: 16})
-	if err := svc.ExportCapture(filepath.Join(t.TempDir(), "x.upac")); err == nil {
-		t.Fatal("processed frames without raw stream should not export")
-	}
-}
-
-func TestImportLegacyFramesHasNoHierarchy(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.upac")
-	if err := capture.SaveFile(path, capture.File{
-		Handshake: protocol.Handshake{DeviceName: "Pixel 7", UnityVersion: "2022.3.47f1"},
-		Frames:    []protocol.FrameData{{FrameIndex: 9, FPS: 60, CPUTimeMs: 16}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	svc := newTestService()
-	n, err := svc.ImportCapture(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("imported %d", n)
-	}
-	if h := svc.FrameHierarchy(0); h != nil {
-		t.Fatalf("legacy v1 has no hierarchy, got %+v", h)
-	}
-}
-
-func hierarchyHas(nodes []protocol.SampleNode, name string) bool {
-	for _, n := range nodes {
-		if n.Name == name {
-			return true
-		}
-		if hierarchyHas(n.Children, name) {
-			return true
-		}
-	}
-	return false
-}
-
-func TestExportEmptyFails(t *testing.T) {
-	svc := newTestService()
-	if err := svc.ExportCapture(filepath.Join(t.TempDir(), "x.upac")); err == nil {
-		t.Fatal("expected empty export error")
-	}
-}
-
-func TestImportCaptureRestoresDevice(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dev.upac")
-	if err := capture.SaveFile(path, capture.File{
-		Handshake: protocol.Handshake{DeviceName: "Pixel 7", UnityVersion: "2022.3.47f1"},
-		Frames:    []protocol.FrameData{{FrameIndex: 9, FPS: 60}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	svc := newTestService()
-	if _, err := svc.ImportCapture(path); err != nil {
-		t.Fatal(err)
-	}
-	st := svc.Status()
-	if st.Device.DeviceName != "Pixel 7" || st.Device.UnityVersion != "2022.3.47f1" {
-		t.Fatalf("device = %+v", st.Device)
-	}
-}
-
-func TestImportCapturePausesWhenConnectedFlag(t *testing.T) {
-	svc := newTestService()
-	for _, c := range unityprofiler.SampleProfilerCapture() {
-		svc.session.AppendRaw(c)
-	}
-	path := filepath.Join(t.TempDir(), "cap.upac")
-	if err := svc.ExportCapture(path); err != nil {
-		t.Fatal(err)
-	}
-	svc.SetRecording(true)
-	if _, err := svc.ImportCapture(path); err != nil {
-		t.Fatal(err)
-	}
-	if !svc.Status().Recording {
-		t.Fatal("offline import should keep recording flag when not connected")
+	if err := svc.ExportCapture(filepath.Join(t.TempDir(), "capture.data")); err == nil || !strings.Contains(err.Error(), "PD3U") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -544,5 +404,94 @@ func TestStatusCarriesLastError(t *testing.T) {
 	svc.onClosed(nil)
 	if got := svc.Status().LastError; got != "" {
 		t.Fatalf("正常断开应清空，实际 %q", got)
+	}
+}
+
+func TestEOFStartsReconnectWithoutErrorPopup(t *testing.T) {
+	old := reconnectInterval
+	reconnectInterval = 30 * time.Millisecond
+	defer func() { reconnectInterval = old }()
+
+	player := unityprofiler.NewPlayer()
+	player.Interval = 8 * time.Millisecond
+	port, err := player.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer player.Stop()
+
+	svc := newTestService()
+	defer svc.Disconnect()
+	if _, err := svc.connectTCP("127.0.0.1", port, "tcp", true); err != nil {
+		t.Fatal(err)
+	}
+	waitFrames := func(min int, d time.Duration) int {
+		deadline := time.Now().Add(d)
+		for time.Now().Before(deadline) {
+			if n := svc.FrameCount(); n >= min {
+				return n
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		return svc.FrameCount()
+	}
+	before := waitFrames(3, time.Second)
+	if before < 3 {
+		t.Fatalf("重连前只收到 %d 帧", before)
+	}
+
+	player.DropClients()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		st := svc.Status()
+		if st.Reconnecting || st.Connected {
+			if strings.Contains(strings.ToUpper(st.LastError), "EOF") {
+				t.Fatalf("EOF 自动重连不应弹错误: %q", st.LastError)
+			}
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if le := svc.Status().LastError; strings.Contains(strings.ToUpper(le), "EOF") {
+		t.Fatalf("LastError=%q", le)
+	}
+
+	after := waitFrames(before+3, 2*time.Second)
+	if after < before+3 {
+		t.Fatalf("native 断开后应自动恢复出帧: 之前=%d 之后=%d reconnecting=%v connected=%v err=%q",
+			before, after, svc.Status().Reconnecting, svc.Status().Connected, svc.Status().LastError)
+	}
+	if svc.Status().Reconnecting {
+		t.Fatal("恢复后不应仍处于重连")
+	}
+}
+
+func TestDisconnectStopsReconnect(t *testing.T) {
+	old := reconnectInterval
+	reconnectInterval = 20 * time.Millisecond
+	defer func() { reconnectInterval = old }()
+
+	player := unityprofiler.NewPlayer()
+	player.Interval = 8 * time.Millisecond
+	port, err := player.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer player.Stop()
+
+	svc := newTestService()
+	if _, err := svc.connectTCP("127.0.0.1", port, "tcp", true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && svc.FrameCount() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	player.DropClients()
+	time.Sleep(50 * time.Millisecond)
+	svc.Disconnect()
+	time.Sleep(80 * time.Millisecond)
+	if svc.Status().Connected || svc.Status().Reconnecting {
+		t.Fatalf("用户断开后不应自动重连: %+v", svc.Status())
 	}
 }

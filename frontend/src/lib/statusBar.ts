@@ -2,12 +2,14 @@ import type { Status } from '../types';
 
 /** 状态栏连接文案。 */
 export function connectionLabel(status: Status): string {
+  if (status.reconnecting) return '等待游戏恢复';
   if (!status.connected) return '未连接';
   return status.transport === 'adb' ? 'USB 已连接' : '已连接';
 }
 
 /** 状态栏采集文案。 */
 export function recordingLabel(status: Status): string {
+  if (status.reconnecting) return '等待恢复';
   if (!status.connected) return '空闲';
   return status.recording === false ? '已暂停' : '采集中';
 }

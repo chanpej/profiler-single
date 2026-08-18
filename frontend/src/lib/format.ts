@@ -1,9 +1,9 @@
 // 纯格式化工具函数，供组件展示数值使用。
 
-/** 格式化毫秒耗时，如 16.7ms。 */
+/** 格式化毫秒耗时，固定保留 2 位小数，如 16.67ms。 */
 export function formatMs(v: number): string {
   if (!Number.isFinite(v)) return '--';
-  return `${v.toFixed(1)}ms`;
+  return `${v.toFixed(2)}ms`;
 }
 
 /** 格式化 FPS，保留 1 位小数。 */
@@ -46,6 +46,17 @@ export function formatMB1(v: number): string {
   if (!Number.isFinite(v) || v < 0) return '--';
   if (v >= 1024) return `${(v / 1024).toFixed(2)} GB`;
   return `${v.toFixed(1)} MB`;
+}
+
+/**
+ * 格式化单帧 GC 分配量（输入为 KB），按 Unity Profiler 的 B / KB / MB
+ * 单位显示，并固定保留一位小数。
+ */
+export function formatGCAlloc(kb: number): string {
+  if (!Number.isFinite(kb) || kb < 0) return '--';
+  if (kb < 1) return `${(kb * 1024).toFixed(1)} B`;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
 }
 
 /** 格式化百分比。 */

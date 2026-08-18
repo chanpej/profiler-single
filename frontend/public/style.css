@@ -267,6 +267,7 @@ body {
   flex-shrink: 0;
 }
 .conn-dot.on { background: var(--good); box-shadow: 0 0 6px var(--good); }
+.conn-dot.wait { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
 
 .conn-info { color: var(--text); }
 .unity-unsupported { color: var(--warn); }

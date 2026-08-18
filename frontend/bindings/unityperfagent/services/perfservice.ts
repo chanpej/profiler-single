@@ -87,7 +87,10 @@ export function DiscoverPlayers(): $CancellablePromise<unityprofiler$0.PlayerInf
 }
 
 /**
- * ExportCapture 将当前会话的原始 Profiler 数据流导出为 .upac 文件。
+ * ExportCapture 不再生成自定义 UPAC 容器。
+ * Unity Editor 的 .data 是其私有的已解码离线帧格式，不能通过重命名或封装
+ * PlayerConnection 的 PD3U 原始流生成。为避免输出无法被 Unity 打开的伪 .data，
+ * 当前不支持从实时采集导出；请在 Unity Editor 中保存该格式。
  */
 export function ExportCapture(path: string): $CancellablePromise<void> {
     return $Call.ByID(240066965, path);
@@ -113,8 +116,8 @@ export function Frames(offset: number, limit: number): $CancellablePromise<proto
 }
 
 /**
- * ImportCapture 加载存档并按当前解码器重新分析。
- * v2 文件重放原始 Profiler 流；v1 旧文件仅还原已解码帧（无 Hierarchy）。
+ * ImportCapture 加载 Unity 2022 Editor Profiler 保存的 .data 文件。
+ * 离线 .data 帧体与实时 PD3U 流不同，因此不会重放或伪造原始流。
  * 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
  */
 export function ImportCapture(path: string): $CancellablePromise<number> {

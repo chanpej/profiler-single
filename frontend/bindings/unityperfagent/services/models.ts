@@ -66,10 +66,16 @@ export interface Status {
     "managedCallstacksSupported": boolean;
 
     /**
-     * LastError 是最近一次采集异常中断的原因；正常断开或未出错时为空。
+     * LastError 是最近一次采集异常中断的原因；正常断开、对端 EOF 自动重连或未出错时为空。
      * 解码失步这类问题必须让用户看见，否则界面只会停在"已连接但不再出帧"。
      */
     "lastError": string;
+
+    /**
+     * Reconnecting 表示用户仍要保持采集，但对端已断开（典型是 Android native Activity
+     * 盖住 Unity 时 PlayerConnection 直接 EOF），正在等游戏回到前台后自动重连。
+     */
+    "reconnecting": boolean;
 
     /**
      * HasRaw 表示会话里有可导出的原始 Profiler 数据流。

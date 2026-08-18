@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -20,14 +21,19 @@ const (
 	HandshakeTimeout = 5 * time.Second
 	// maxChunksWithoutHeader 是允许在数据流头之前到达的分块数上限（约几秒的量）。
 	maxChunksWithoutHeader = 2000
-	// IdleTimeout 是读取循环允许的最长静默。Player 同时只服务一个 Profiler 客户端，
-	// 阻塞在读上不退出会一直占着这个槽位，导致之后谁都连不上（连上也收不到数据），
-	// 所以静默超时必须主动断开。采集中每秒有几十帧，正常绝不会触发。
+	// IdleTimeout 是读取循环每次等下一条报文的上限。超时后不断开、继续等：
+	// Android 弹出系统对话框时游戏会 OnApplicationPause，Player 暂停上报，
+	// 对话框关掉后同一条连接会继续吐帧。真正的对端关闭（EOF/RST）或用户点
+	// 断开才会结束会话。采集中每秒有几十帧，正常绝不会触发这次等待。
 	IdleTimeout = 10 * time.Second
 	// EditorIdentity 是本工具在宣告报文里自报的身份，前缀与 Editor 一致，
 	// 便于 Player 侧日志区分连接来源。
 	EditorIdentity = "UnityEditor.Profiler"
 )
+
+// readIdleTimeout 是读取循环每次 Read 的截止时间，默认等于 IdleTimeout。
+// 单测可改短，避免为「切后台再恢复」等十几秒。
+var readIdleTimeout = IdleTimeout
 
 // ErrNotConnected 表示尚未连上 Player。
 var ErrNotConnected = errors.New("unityprofiler: not connected")
@@ -57,6 +63,34 @@ func IsPlayerReject(err error) bool {
 func isTimeout(err error) bool {
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// IsLostConnection 判断是否为对端把 TCP 关掉（EOF / RST），而不是解码失步。
+// Android 弹出 native Activity 时 Unity 会直接断开 PlayerConnection。
+func IsLostConnection(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	if isTimeout(err) {
+		return false
+	}
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, n := range []string{
+		"eof", "forcibly closed", "broken pipe", "connection reset",
+		"wsarecv", "connection aborted", "connection refused",
+	} {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // FrameHandler 每解析出一帧 Profiler 数据时回调。hierarchy 为主线程采样树，可为空。
@@ -332,16 +366,18 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 		}
 	}
 	for loopErr == nil {
-		// 每条报文都续一次静默超时：宁可断开也不能阻塞在读上占着 Player 的槽位。
-		_ = conn.SetReadDeadline(time.Now().Add(IdleTimeout))
+		// 每条报文都续一次读等待。超时通常发生在「下一条报文的第一个字节」
+		// （App 进后台、Player 暂停上报），bufio 里没有半包，可以继续等。
+		_ = conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
 		msg, err := ReadMessage(br)
 		if err != nil {
-			if ctx.Err() == nil {
-				loopErr = err
-				if isTimeout(err) {
-					loopErr = fmt.Errorf("unityprofiler: Player 静默超过 %s，已主动断开（游戏可能已切到后台或停止上报）", IdleTimeout)
-				}
+			if ctx.Err() != nil {
+				break
 			}
+			if isTimeout(err) {
+				continue
+			}
+			loopErr = err
 			break
 		}
 		if msg.ID != MsgIDProfilerData {
