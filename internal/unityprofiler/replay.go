@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -14,52 +15,72 @@ var ErrNoStreamHeader = errors.New("缺少 Profiler 数据流头（PD3U），无
 // ReplayProgress 在 Replay 过程中报告已处理分块数（done/total）。
 type ReplayProgress func(done, total int)
 
-// Replay 把保存的原始 Profiler 数据流重新送入解码器。
-// 没有流头、格式不受支持、解码失步或解不出任何帧时返回错误，不补数据。
+// Replay 把保存的原始 Profiler 数据流重新送入解码器。保留摘要和 Hierarchy
+// 的旧投影接口；新调用方应使用 ReplayFrames 获取统一内存模型。
 func Replay(chunks [][]byte) (frames []protocol.FrameData, hierarchies [][]protocol.SampleNode, err error) {
 	return ReplayWithProgress(chunks, nil)
 }
 
 // ReplayWithProgress 与 Replay 相同，并按分块回调进度。
 func ReplayWithProgress(chunks [][]byte, progress ReplayProgress) (frames []protocol.FrameData, hierarchies [][]protocol.SampleNode, err error) {
+	memoryFrames, err := ReplayFramesWithProgress(chunks, progress)
+	if err != nil {
+		return nil, nil, err
+	}
+	frames = make([]protocol.FrameData, len(memoryFrames))
+	hierarchies = make([][]protocol.SampleNode, len(memoryFrames))
+	for i, frame := range memoryFrames {
+		frames[i] = frame.Summary
+		hierarchies[i] = frame.MainThread
+	}
+	return frames, hierarchies, nil
+}
+
+// ReplayFrames normalizes saved PlayerConnection data into the same in-memory
+// frame model used by live decoding and .data imports.
+func ReplayFrames(chunks [][]byte) ([]profileframe.Frame, error) {
+	return ReplayFramesWithProgress(chunks, nil)
+}
+
+// ReplayFramesWithProgress is ReplayFrames with a per-chunk progress callback.
+func ReplayFramesWithProgress(chunks [][]byte, progress ReplayProgress) (frames []profileframe.Frame, err error) {
 	report := func(done int) {
 		if progress != nil {
 			progress(done, len(chunks))
 		}
 	}
 	if len(chunks) == 0 {
-		return nil, nil, errors.New("原始 Profiler 数据为空")
+		return nil, errors.New("原始 Profiler 数据为空")
 	}
 	hdr, ok := firstStreamHeader(chunks)
 	if !ok {
-		return nil, nil, ErrNoStreamHeader
+		return nil, ErrNoStreamHeader
 	}
 	h, err := ParseStreamHeader(hdr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Profiler 数据流头无效：%w", err)
+		return nil, fmt.Errorf("Profiler 数据流头无效：%w", err)
 	}
 	if !IsSupportedStreamVersion(h.FormatVersion) {
-		return nil, nil, fmt.Errorf("Profiler 数据流格式 %#x 不受支持（仅支持 Unity %s，格式 %#x）",
+		return nil, fmt.Errorf("Profiler 数据流格式 %#x 不受支持（仅支持 Unity %s，格式 %#x）",
 			h.FormatVersion, protocol.SupportedUnityMajor, Unity2022StreamVersion)
 	}
 
 	dec := NewDecoder(func(snap FrameSnapshot) {
-		frames = append(frames, ToFrameData(snap))
-		hierarchies = append(hierarchies, snap.Hierarchy)
+		frames = append(frames, ToMemoryFrame(snap))
 	})
 	report(0)
 	for i, c := range chunks {
 		if ferr := dec.Feed(c); ferr != nil {
 			st := dec.Stats()
 			if st.Desynced {
-				return nil, nil, fmt.Errorf("Profiler 数据流解析失步（分块 %d）：%s", i, st.LastError)
+				return nil, fmt.Errorf("Profiler 数据流解析失步（分块 %d）：%s", i, st.LastError)
 			}
 		}
 		report(i + 1)
 	}
 	st := dec.Stats()
 	if st.Desynced {
-		return nil, nil, fmt.Errorf("Profiler 数据流解析失步：%s", st.LastError)
+		return nil, fmt.Errorf("Profiler 数据流解析失步：%s", st.LastError)
 	}
 	if len(frames) == 0 {
 		reason := st.LastError
@@ -69,9 +90,9 @@ func ReplayWithProgress(chunks [][]byte, progress ReplayProgress) (frames []prot
 		if reason == "" {
 			reason = "未找到有效帧边界"
 		}
-		return nil, nil, fmt.Errorf("未能从原始数据中解析出任何帧：%s", reason)
+		return nil, fmt.Errorf("未能从原始数据中解析出任何帧：%s", reason)
 	}
-	return frames, hierarchies, nil
+	return frames, nil
 }
 
 func firstStreamHeader(chunks [][]byte) ([]byte, bool) {

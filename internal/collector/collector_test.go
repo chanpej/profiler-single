@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -252,6 +253,16 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 	wg.Wait()
 	if s.Len() != 1000 || s.Total() != 1000 {
 		t.Fatalf("len=%d total=%d, want 1000/1000", s.Len(), s.Total())
+	}
+}
+
+func TestAppendFrameKeepsSummaryAndHierarchyTogether(t *testing.T) {
+	s := NewSession(2)
+	frame := profileframe.New(frameN(7), []protocol.SampleNode{{Name: "Main Thread", TotalMs: 16}})
+	s.AppendFrame(frame)
+	stored, ok := s.FrameAt(0)
+	if !ok || stored.Summary.FrameIndex != 7 || len(stored.MainThread) != 1 || stored.MainThread[0].Name != "Main Thread" {
+		t.Fatalf("FrameAt(0) = %+v ok=%v", stored, ok)
 	}
 }
 

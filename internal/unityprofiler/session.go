@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -93,8 +94,9 @@ func IsLostConnection(err error) bool {
 	return false
 }
 
-// FrameHandler 每解析出一帧 Profiler 数据时回调。hierarchy 为主线程采样树，可为空。
-type FrameHandler func(frame protocol.FrameData, hierarchy []protocol.SampleNode)
+// FrameHandler receives one normalized in-memory Profiler frame. Both live and
+// offline sources produce this model before their data reaches the UI session.
+type FrameHandler func(frame profileframe.Frame)
 
 // Session 是连到 Unity Development Player 的 Profiler 客户端。
 type Session struct {
@@ -333,7 +335,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 	flush := func() {
 		for _, snap := range snaps {
 			if onFrame != nil {
-				onFrame(ToFrameData(snap), snap.Hierarchy)
+				onFrame(ToMemoryFrame(snap))
 			}
 		}
 		snaps = snaps[:0]

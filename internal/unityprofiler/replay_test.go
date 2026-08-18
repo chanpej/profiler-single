@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"unityperfagent/internal/protocol"
+	"unityperfagent/internal/profileframe"
 )
 
 func TestReplayRebuildsHierarchyFromRaw(t *testing.T) {
@@ -29,6 +29,13 @@ func TestReplayRebuildsHierarchyFromRaw(t *testing.T) {
 	alloc := findSample(hiers[0], "GC.Alloc")
 	if alloc == nil || len(alloc.Callstack) == 0 {
 		t.Fatalf("GC.Alloc callstack missing: %+v", alloc)
+	}
+	memoryFrames, err := ReplayFrames(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memoryFrames) != 1 || memoryFrames[0].Summary.FrameIndex != 1 || !hierarchyHas(memoryFrames[0].MainThread, "PlayerController.Update") {
+		t.Fatalf("memory frames = %+v", memoryFrames)
 	}
 }
 
@@ -142,7 +149,7 @@ func TestSessionSurvivesPlayerPause(t *testing.T) {
 	var n int
 	closed := make(chan error, 1)
 	sess := NewSession()
-	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, _ []protocol.SampleNode) {
+	if _, err := sess.Connect("127.0.0.1", port, func(_ profileframe.Frame) {
 		mu.Lock()
 		n++
 		mu.Unlock()

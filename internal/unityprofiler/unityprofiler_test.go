@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -1079,7 +1080,7 @@ func TestFrameCallbackDoesNotHoldSessionLock(t *testing.T) {
 
 	sess := NewSession()
 	reentered := make(chan struct{}, 1)
-	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, _ []protocol.SampleNode) {
+	if _, err := sess.Connect("127.0.0.1", port, func(_ profileframe.Frame) {
 		// 回调里回查会话：若解码时仍持着会话锁，这里会永久阻塞。
 		_ = sess.DecodeStats()
 		_ = sess.Connected()
@@ -1202,9 +1203,9 @@ func TestCallStacksAloneCarriesManagedAllocStacks(t *testing.T) {
 	var mu sync.Mutex
 	var last []protocol.SampleNode
 	sess := NewSession()
-	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+	if _, err := sess.Connect("127.0.0.1", port, func(frame profileframe.Frame) {
 		mu.Lock()
-		last = h
+		last = frame.MainThread
 		mu.Unlock()
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -1243,9 +1244,9 @@ func TestCallStacksOffKeepsAllocSampleWithoutStack(t *testing.T) {
 	var mu sync.Mutex
 	var last []protocol.SampleNode
 	sess := NewSession()
-	if _, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+	if _, err := sess.Connect("127.0.0.1", port, func(frame profileframe.Frame) {
 		mu.Lock()
-		last = h
+		last = frame.MainThread
 		mu.Unlock()
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -1286,9 +1287,9 @@ func TestSessionDeepProfileAndCallStacks(t *testing.T) {
 	var mu sync.Mutex
 	var last []protocol.SampleNode
 	sess := NewSession()
-	hs, err := sess.Connect("127.0.0.1", port, func(_ protocol.FrameData, h []protocol.SampleNode) {
+	hs, err := sess.Connect("127.0.0.1", port, func(frame profileframe.Frame) {
 		mu.Lock()
-		last = h
+		last = frame.MainThread
 		mu.Unlock()
 	}, nil)
 	if err != nil {

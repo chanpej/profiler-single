@@ -3,6 +3,7 @@ package unityprofiler
 import (
 	"time"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -52,24 +53,27 @@ const (
 
 // cpuCategoryField 把 ProfilerCategory 归并到 CPU 占用图的各个分段。
 var cpuCategoryField = map[string]func(*protocol.FrameData, float32){
-	"Render":      func(f *protocol.FrameData, v float32) { f.CPURenderingMs += v },
-	"Scripts":     func(f *protocol.FrameData, v float32) { f.CPUScriptsMs += v },
-	"Physics":     func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
-	"Physics2D":   func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
-	"Animation":   func(f *protocol.FrameData, v float32) { f.CPUAnimationMs += v },
-	"GC":          func(f *protocol.FrameData, v float32) { f.CPUGCMs += v },
-	"VSync":       func(f *protocol.FrameData, v float32) { f.CPUVSyncMs += v },
-	"Gui":         func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
-	"UI Layout":   func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
-	"UI Render":   func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
-	"UI Details":  func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
+	"Render":     func(f *protocol.FrameData, v float32) { f.CPURenderingMs += v },
+	"Scripts":    func(f *protocol.FrameData, v float32) { f.CPUScriptsMs += v },
+	"Physics":    func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
+	"Physics2D":  func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
+	"Animation":  func(f *protocol.FrameData, v float32) { f.CPUAnimationMs += v },
+	"GC":         func(f *protocol.FrameData, v float32) { f.CPUGCMs += v },
+	"VSync":      func(f *protocol.FrameData, v float32) { f.CPUVSyncMs += v },
+	"Gui":        func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
+	"UI Layout":  func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
+	"UI Render":  func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
+	"UI Details": func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
 }
 
-// ToFrameData 把一帧快照转换为 UI 使用的 FrameData。
-//
-// CPU Usage 与 Hierarchy 同源：取主线程采样总时长（RootNS）。
-// Render/CPU Total Frame Time 不含加载阻塞等等待，卡顿帧会远小于 Main Thread，
-// 不能拿来画 CPU 模块。FPS 仍按帧边界间隔（真实帧率）。
+// ToMemoryFrame normalizes a live raw-stream snapshot into the same in-memory
+// frame model used by offline .data imports.
+func ToMemoryFrame(snap FrameSnapshot) profileframe.Frame {
+	return profileframe.New(ToFrameData(snap), snap.Hierarchy)
+}
+
+// ToFrameData projects a raw snapshot to the summary consumed by the frame list
+// and charts. CPU Usage and Hierarchy both use the Main Thread root duration.
 func ToFrameData(snap FrameSnapshot) protocol.FrameData {
 	f := protocol.FrameData{
 		FrameIndex:  uint64(snap.Index),

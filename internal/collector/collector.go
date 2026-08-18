@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -38,13 +39,12 @@ type Stats struct {
 // Session 是一次采集会话，线程安全。
 type Session struct {
 	mu       sync.RWMutex
-	buf      []protocol.FrameData
-	hier     [][]protocol.SampleNode
+	frames   []profileframe.Frame
 	raw      [][]byte
 	rawBytes int
 	header   []byte // 流头报文体，清空帧时保留，导出时补到原始流前面
 	head     int    // 下一个写入位置
-	size     int // 当前存储帧数
+	size     int    // 当前存储帧数
 	total    uint64
 }
 
@@ -54,24 +54,31 @@ func NewSession(capacity int) *Session {
 		capacity = DefaultCapacity
 	}
 	return &Session{
-		buf:  make([]protocol.FrameData, capacity),
-		hier: make([][]protocol.SampleNode, capacity),
+		frames: make([]profileframe.Frame, capacity),
 	}
 }
 
-// Append 追加一帧数据。
+// Append 追加一帧摘要。兼容仅有计数器的调用方。
 func (s *Session) Append(f protocol.FrameData) {
-	s.AppendDetail(f, nil)
+	s.AppendFrame(profileframe.New(f, nil))
 }
 
-// AppendDetail 追加一帧及其 CPU Hierarchy。
+// AppendDetail 追加一帧及其 CPU Hierarchy。新代码应优先使用 AppendFrame。
 func (s *Session) AppendDetail(f protocol.FrameData, hierarchy []protocol.SampleNode) {
+	s.AppendFrame(profileframe.New(f, hierarchy))
+}
+
+// AppendFrame 追加一帧已归一化的内存 Profiler 数据。
+func (s *Session) AppendFrame(frame profileframe.Frame) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.buf[s.head] = f
-	s.hier[s.head] = hierarchy
-	s.head = (s.head + 1) % len(s.buf)
-	if s.size < len(s.buf) {
+	s.appendFrameLocked(frame)
+}
+
+func (s *Session) appendFrameLocked(frame profileframe.Frame) {
+	s.frames[s.head] = frame
+	s.head = (s.head + 1) % len(s.frames)
+	if s.size < len(s.frames) {
 		s.size++
 	}
 	s.total++
@@ -96,8 +103,8 @@ func (s *Session) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.head, s.size, s.total = 0, 0, 0
-	for i := range s.hier {
-		s.hier[i] = nil
+	for i := range s.frames {
+		s.frames[i] = profileframe.Frame{}
 	}
 }
 
@@ -106,52 +113,70 @@ func (s *Session) ClearAll() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.head, s.size, s.total = 0, 0, 0
-	for i := range s.hier {
-		s.hier[i] = nil
+	for i := range s.frames {
+		s.frames[i] = profileframe.Frame{}
 	}
 	s.raw, s.rawBytes = nil, 0
 	s.header = nil
 }
 
-// Replace 用 frames 覆盖当前会话。超出容量时保留末尾（最新）帧。
+// Replace 用仅有摘要的帧覆盖当前会话。新代码应优先使用 ReplaceFrames。
 func (s *Session) Replace(frames []protocol.FrameData) {
-	s.ReplaceDetail(frames, nil)
+	memoryFrames := make([]profileframe.Frame, len(frames))
+	for i, frame := range frames {
+		memoryFrames[i] = profileframe.New(frame, nil)
+	}
+	s.ReplaceFrames(memoryFrames)
 }
 
-// ReplaceDetail 用帧数据及其 CPU Hierarchy 覆盖当前会话。
-// hierarchies 可比 frames 短；超出容量时与 frames 一并保留末尾。
+// ReplaceDetail 用平行的摘要和 Hierarchy 覆盖当前会话。保留给旧调用方兼容；
+// 新代码应在解码边界将它们合并为 profileframe.Frame。
 func (s *Session) ReplaceDetail(frames []protocol.FrameData, hierarchies [][]protocol.SampleNode) {
+	memoryFrames := make([]profileframe.Frame, len(frames))
+	for i, frame := range frames {
+		var hierarchy []protocol.SampleNode
+		if i < len(hierarchies) {
+			hierarchy = hierarchies[i]
+		}
+		memoryFrames[i] = profileframe.New(frame, hierarchy)
+	}
+	s.ReplaceFrames(memoryFrames)
+}
+
+// ReplaceFrames 用已归一化的内存帧覆盖当前会话。超出容量时保留末尾（最新）帧。
+func (s *Session) ReplaceFrames(frames []profileframe.Frame) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.head, s.size, s.total = 0, 0, 0
-	for i := range s.hier {
-		s.hier[i] = nil
+	for i := range s.frames {
+		s.frames[i] = profileframe.Frame{}
 	}
 	s.raw, s.rawBytes = nil, 0
 	s.header = nil
-	if len(frames) == 0 {
-		return
-	}
 	start := 0
-	if len(frames) > len(s.buf) {
-		start = len(frames) - len(s.buf)
+	if len(frames) > len(s.frames) {
+		start = len(frames) - len(s.frames)
 	}
 	for i := start; i < len(frames); i++ {
-		s.buf[s.head] = frames[i]
-		if i < len(hierarchies) {
-			s.hier[s.head] = hierarchies[i]
-		}
-		s.head = (s.head + 1) % len(s.buf)
-		if s.size < len(s.buf) {
-			s.size++
-		}
-		s.total++
+		s.appendFrameLocked(frames[i])
 	}
 }
 
-// Range 返回按时间顺序排列的第 offset 起 limit 帧（offset 0 为最旧帧）。
-// 越界部分会被裁剪；结果是副本，可安全在锁外使用。
+// Range 返回按时间顺序排列的第 offset 起 limit 帧摘要（offset 0 为最旧帧）。
 func (s *Session) Range(offset, limit int) []protocol.FrameData {
+	frames := s.RangeFrames(offset, limit)
+	if len(frames) == 0 {
+		return nil
+	}
+	out := make([]protocol.FrameData, len(frames))
+	for i, frame := range frames {
+		out[i] = frame.Summary
+	}
+	return out
+}
+
+// RangeFrames 返回统一内存帧模型的副本，可安全在锁外使用。
+func (s *Session) RangeFrames(offset, limit int) []profileframe.Frame {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if offset < 0 {
@@ -163,59 +188,55 @@ func (s *Session) Range(offset, limit int) []protocol.FrameData {
 	if offset+limit > s.size {
 		limit = s.size - offset
 	}
-	out := make([]protocol.FrameData, limit)
-	start := s.head - s.size + len(s.buf)
+	out := make([]profileframe.Frame, limit)
+	start := s.head - s.size + len(s.frames)
 	for i := 0; i < limit; i++ {
-		out[i] = s.buf[(start+offset+i)%len(s.buf)]
+		out[i] = s.frames[(start+offset+i)%len(s.frames)]
 	}
 	return out
 }
 
-// At 返回从最旧帧起第 index 帧。越界时 ok 为 false。
+// At 返回从最旧帧起第 index 帧摘要。越界时 ok 为 false。
 func (s *Session) At(index int) (protocol.FrameData, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if index < 0 || index >= s.size {
-		return protocol.FrameData{}, false
-	}
-	start := s.head - s.size + len(s.buf)
-	return s.buf[(start+index)%len(s.buf)], true
+	frame, ok := s.FrameAt(index)
+	return frame.Summary, ok
 }
 
-// HierarchyAt 返回第 index 帧的 CPU Hierarchy。无数据时 ok 为 false。
-func (s *Session) HierarchyAt(index int) ([]protocol.SampleNode, bool) {
+// FrameAt 返回从最旧帧起第 index 个统一内存帧。
+func (s *Session) FrameAt(index int) (profileframe.Frame, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if index < 0 || index >= s.size {
-		return nil, false
+		return profileframe.Frame{}, false
 	}
-	start := s.head - s.size + len(s.buf)
-	h := s.hier[(start+index)%len(s.buf)]
-	if len(h) == 0 {
-		return nil, true
+	start := s.head - s.size + len(s.frames)
+	return s.frames[(start+index)%len(s.frames)], true
+}
+
+// HierarchyAt 返回第 index 帧的 Main Thread CPU Hierarchy。无数据时 ok 为 false。
+func (s *Session) HierarchyAt(index int) ([]protocol.SampleNode, bool) {
+	frame, ok := s.FrameAt(index)
+	if !ok || len(frame.MainThread) == 0 {
+		return nil, ok
 	}
-	out := make([]protocol.SampleNode, len(h))
-	copy(out, h)
+	out := make([]protocol.SampleNode, len(frame.MainThread))
+	copy(out, frame.MainThread)
 	return out, true
 }
 
-// Hierarchies 返回与 Range(0, Len()) 对齐的各帧 CPU Hierarchy。
+// Hierarchies 返回与 Range(0, Len()) 对齐的各帧 Main Thread Hierarchy。
 func (s *Session) Hierarchies() [][]protocol.SampleNode {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.size == 0 {
+	frames := s.RangeFrames(0, s.Len())
+	if len(frames) == 0 {
 		return nil
 	}
-	out := make([][]protocol.SampleNode, s.size)
-	start := s.head - s.size + len(s.buf)
-	for i := 0; i < s.size; i++ {
-		h := s.hier[(start+i)%len(s.buf)]
-		if len(h) == 0 {
+	out := make([][]protocol.SampleNode, len(frames))
+	for i, frame := range frames {
+		if len(frame.MainThread) == 0 {
 			continue
 		}
-		cp := make([]protocol.SampleNode, len(h))
-		copy(cp, h)
-		out[i] = cp
+		out[i] = make([]protocol.SampleNode, len(frame.MainThread))
+		copy(out[i], frame.MainThread)
 	}
 	return out
 }

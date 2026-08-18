@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"unityperfagent/internal/llm"
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 	"unityperfagent/internal/unityprofiler"
 )
@@ -229,7 +230,7 @@ func TestConnectUSBNoDevice(t *testing.T) {
 
 func TestSetRecordingPausesCapture(t *testing.T) {
 	svc := newTestService()
-	svc.onFrame(protocol.FrameData{FrameIndex: 1, FPS: 60}, nil)
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 1, FPS: 60}, nil))
 	if svc.FrameCount() != 1 {
 		t.Fatalf("count = %d", svc.FrameCount())
 	}
@@ -237,12 +238,12 @@ func TestSetRecordingPausesCapture(t *testing.T) {
 	if svc.Status().Recording {
 		t.Fatal("expected recording off")
 	}
-	svc.onFrame(protocol.FrameData{FrameIndex: 2, FPS: 60}, nil)
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 2, FPS: 60}, nil))
 	if svc.FrameCount() != 1 {
 		t.Fatalf("paused capture still stored frame: %d", svc.FrameCount())
 	}
 	svc.SetRecording(true)
-	svc.onFrame(protocol.FrameData{FrameIndex: 3, FPS: 60}, nil)
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 3, FPS: 60}, nil))
 	if svc.FrameCount() != 2 {
 		t.Fatalf("resume count = %d", svc.FrameCount())
 	}
@@ -256,6 +257,12 @@ func TestImportOfficialUnityData(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := newTestService()
+	var progress []ImportProgressEvent
+	svc.emit = func(name string, data any) {
+		if name == ImportProgressEventName {
+			progress = append(progress, data.(ImportProgressEvent))
+		}
+	}
 	n, err := svc.ImportCapture(path)
 	if err != nil {
 		t.Fatalf("ImportCapture: %v", err)
@@ -277,6 +284,16 @@ func TestImportOfficialUnityData(t *testing.T) {
 	}
 	if svc.Status().HasRaw {
 		t.Fatal("official .data must not be treated as a PD3U raw stream")
+	}
+	hasIntermediateProgress := false
+	for _, event := range progress {
+		if event.Phase == "parse" && event.Percent > 0 && event.Percent < 100 {
+			hasIntermediateProgress = true
+			break
+		}
+	}
+	if !hasIntermediateProgress {
+		t.Fatalf("import progress lacks intermediate parse event: %+v", progress)
 	}
 }
 
@@ -375,9 +392,9 @@ func TestSetDeepProfilingAndCallStacks(t *testing.T) {
 	if !st.DeepProfiling || !st.CallStacks {
 		t.Fatalf("status=%+v", st)
 	}
-	svc.onFrame(protocol.FrameData{FrameIndex: 1, FPS: 60}, []protocol.SampleNode{
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 1, FPS: 60}, []protocol.SampleNode{
 		{Name: "Main Thread", TotalMs: 16, Children: []protocol.SampleNode{{Name: "PlayerController.Update", TotalMs: 4}}},
-	})
+	}))
 	h := svc.FrameHierarchy(0)
 	if len(h) != 1 || h[0].Name != "Main Thread" || len(h[0].Children) != 1 {
 		t.Fatalf("hierarchy=%+v", h)

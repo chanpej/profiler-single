@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 )
 
@@ -34,9 +35,10 @@ var (
 
 // File 是从 Unity Editor Profiler .data 文件读取的会话。
 type File struct {
-	Handshake   protocol.Handshake
-	Frames      []protocol.FrameData
-	Hierarchies [][]protocol.SampleNode
+	Handshake protocol.Handshake
+	// Frames are the normalized in-memory representation used by both offline
+	// captures and the live PlayerConnection decoder.
+	Frames []profileframe.Frame
 }
 
 type blockHeader struct {
@@ -135,19 +137,45 @@ func readBlockHeader(b []byte) blockHeader {
 	}
 }
 
+// Progress reports .data bytes fully read and parsed. total is zero when the
+// source length is unknown.
+type Progress func(done, total int64)
+
 // LoadFile 从 path 读取 Unity 2022 Editor Profiler 的 .data 文件。
 func LoadFile(path string) (File, error) {
+	return LoadFileWithProgress(path, nil)
+}
+
+// LoadFileWithProgress loads an offline capture and reports byte-level decode
+// progress after every frame body. It keeps the UI responsive for large files.
+func LoadFileWithProgress(path string, progress Progress) (File, error) {
 	r, err := os.Open(path)
 	if err != nil {
 		return File{}, err
 	}
 	defer r.Close()
-	return Decode(r)
+	var total int64
+	if info, err := r.Stat(); err == nil {
+		total = info.Size()
+	}
+	return DecodeWithProgress(r, total, progress)
 }
 
 // Decode 读取 Unity 2022 离线帧、主线程采样树和 CPU 分类耗时。
 func Decode(src io.Reader) (File, error) {
+	return DecodeWithProgress(src, 0, nil)
+}
+
+// DecodeWithProgress decodes an offline capture and reports completed bytes
+// after each frame is available in the common in-memory frame model.
+func DecodeWithProgress(src io.Reader, total int64, progress Progress) (File, error) {
 	br := bufio.NewReaderSize(src, 1<<20)
+	var done int64
+	report := func() {
+		if progress != nil {
+			progress(done, total)
+		}
+	}
 	markers := make(map[uint32]markerInfo)
 	var out File
 	var headerBuf [blockHeaderSize]byte
@@ -160,6 +188,7 @@ func Decode(src io.Reader) (File, error) {
 			}
 			return File{}, fmt.Errorf("读取 Profiler .data 帧头失败：%w", err)
 		}
+		done += 4
 		if binary.LittleEndian.Uint32(headerBuf[:4]) == fileEndMarker {
 			if _, err := br.ReadByte(); err != io.EOF {
 				if err == nil {
@@ -170,6 +199,7 @@ func Decode(src io.Reader) (File, error) {
 			if !seen {
 				return File{}, errors.New("Profiler .data 不含任何帧")
 			}
+			report()
 			return out, nil
 		}
 		if binary.LittleEndian.Uint32(headerBuf[:4]) != unity2022DataVersion {
@@ -178,6 +208,7 @@ func Decode(src io.Reader) (File, error) {
 		if _, err := io.ReadFull(br, headerBuf[4:]); err != nil {
 			return File{}, fmt.Errorf("读取 Profiler .data 帧头失败：%w", err)
 		}
+		done += blockHeaderSize - 4
 		h := readBlockHeader(headerBuf[:])
 		if h.unityMajor != 2022 {
 			return File{}, fmt.Errorf("%w：Unity %d.%d.%d", ErrUnsupportedFormat, h.unityMajor, h.unityMinor, h.unityPatch)
@@ -189,6 +220,7 @@ func Decode(src io.Reader) (File, error) {
 		if _, err := io.ReadFull(br, body); err != nil {
 			return File{}, fmt.Errorf("读取 Profiler .data 帧体失败：%w", err)
 		}
+		done += int64(len(body))
 		if binary.LittleEndian.Uint32(body[len(body)-4:]) != frameEndMarker {
 			return File{}, errors.New("Profiler .data 帧结束标记无效")
 		}
@@ -204,14 +236,13 @@ func Decode(src io.Reader) (File, error) {
 		if err != nil {
 			return File{}, fmt.Errorf("解析第 %d 个 Profiler .data 帧失败：%w", len(out.Frames), err)
 		}
-		if zeroDuration {
-			continue
+		if !zeroDuration {
+			// Unity Editor displays an ordinal frame position, not the Player's
+			// internal frame ID embedded in the capture.
+			frame.FrameIndex = uint64(len(out.Frames) + 1)
+			out.Frames = append(out.Frames, profileframe.New(frame, hierarchy))
 		}
-		// Unity Editor displays an ordinal frame position, not the Player's
-		// internal frame ID embedded in the capture.
-		frame.FrameIndex = uint64(len(out.Frames) + 1)
-		out.Frames = append(out.Frames, frame)
-		out.Hierarchies = append(out.Hierarchies, hierarchy)
+		report()
 	}
 }
 

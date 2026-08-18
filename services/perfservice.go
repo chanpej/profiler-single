@@ -21,6 +21,7 @@ import (
 	"unityperfagent/internal/collector"
 	"unityperfagent/internal/device"
 	"unityperfagent/internal/llm"
+	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 	"unityperfagent/internal/unityprofiler"
 )
@@ -546,7 +547,9 @@ func (p *PerfService) ImportCapture(path string) (int, error) {
 	fileName := filepath.Base(path)
 	last := time.Time{}
 	p.emitImportProgress(fileName, "read", 0, 1, true, &last)
-	file, err := capture.LoadFile(path)
+	file, err := capture.LoadFileWithProgress(path, func(done, total int64) {
+		p.emitImportProgress(fileName, "parse", int(done), int(total), false, &last)
+	})
 	if err != nil {
 		return 0, fmt.Errorf("无法读取存档：%w", err)
 	}
@@ -554,7 +557,7 @@ func (p *PerfService) ImportCapture(path string) (int, error) {
 		return 0, errors.New("Profiler .data 没有可解析的帧")
 	}
 	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
-	p.session.ReplaceDetail(file.Frames, file.Hierarchies)
+	p.session.ReplaceFrames(file.Frames)
 	connected := p.client.Connected()
 	p.mu.Lock()
 	p.sourceFile = path
@@ -688,14 +691,14 @@ func (p *PerfService) Diagnose(ctx context.Context) (string, error) {
 //
 // 绝不能在这里直接推送事件：事件推送要经过 webview，一旦卡住就会把读取循环拖死，
 // 表现为界面显示"已连接"却永远 0 帧，同时连接还占着 Player 唯一的 Profiler 槽位。
-func (p *PerfService) onFrame(f protocol.FrameData, hierarchy []protocol.SampleNode) {
+func (p *PerfService) onFrame(frame profileframe.Frame) {
 	p.mu.Lock()
 	recording := p.recording
 	p.mu.Unlock()
 	if !recording {
 		return
 	}
-	p.session.AppendDetail(f, hierarchy)
+	p.session.AppendFrame(frame)
 	p.notifyUI()
 }
 
