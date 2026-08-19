@@ -76,6 +76,7 @@ export const api = {
   },
   agentChatSend: (message: string): Promise<string> => PerfService.AgentChatSend(message),
   agentChatClose: (): Promise<void> => PerfService.AgentChatClose(),
+  exportAgentChat: (path: string, content: string): Promise<void> => PerfService.ExportAgentChat(path, content),
   agentLogs: (): Promise<AgentLogEntry[]> => agentLogService.AgentLogs().then((rows) => rows ?? []),
   clearAgentLogs: (): Promise<void> => agentLogService.ClearAgentLogs(),
   openAgentLog: (): Promise<void> => agentLogService.OpenAgentLog(),

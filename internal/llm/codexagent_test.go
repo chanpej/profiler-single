@@ -43,14 +43,8 @@ func TestExtractCodexTextsIncludesReasoningAndMCPProgress(t *testing.T) {
 }
 
 func TestCodexAdapterHandshakeAndPrompt(t *testing.T) {
-	run := func(_ context.Context, _, prompt string, _ AgentProfile, emit func(string)) error {
-		if !strings.Contains(prompt, "诊断") {
-			t.Fatalf("prompt = %q", prompt)
-		}
-		emit("对象池")
-		return nil
-	}
-	agent := newCodexACPAgent("", run)
+	server := &fakeCodexServer{reply: "对象池"}
+	agent := newCodexACPAgent("", func() codexServer { return server })
 	clientToAgentR, clientToAgentW := io.Pipe()
 	agentToClientR, agentToClientW := io.Pipe()
 	conn := acp.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
@@ -70,15 +64,16 @@ func TestCodexAdapterHandshakeAndPrompt(t *testing.T) {
 	if !strings.Contains(out, "对象池") {
 		t.Fatalf("out = %q", out)
 	}
+	if len(server.prompts) != 1 || !strings.Contains(server.prompts[0], "诊断") {
+		t.Fatalf("prompts = %#v", server.prompts)
+	}
 }
 
 func TestChatSessionStartsInProcessCodex(t *testing.T) {
-	prev := runCodexExec
-	t.Cleanup(func() { runCodexExec = prev })
-	runCodexExec = func(_ context.Context, _, _ string, _ AgentProfile, emit func(string)) error {
-		emit("in-process ok")
-		return nil
-	}
+	server := &fakeCodexServer{reply: "in-process ok"}
+	prev := createCodexServer
+	t.Cleanup(func() { createCodexServer = prev })
+	createCodexServer = func() codexServer { return server }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -94,17 +89,19 @@ func TestChatSessionStartsInProcessCodex(t *testing.T) {
 	if !strings.Contains(out, "in-process ok") {
 		t.Fatalf("out = %q", out)
 	}
+	if _, err := sess.Prompt(ctx, "分析 frame 30", nil); err != nil {
+		t.Fatalf("follow-up Prompt: %v", err)
+	}
+	if server.starts != 1 || len(server.prompts) != 2 || server.prompts[0] != "hello" || server.prompts[1] != "分析 frame 30" {
+		t.Fatalf("starts=%d prompts=%#v", server.starts, server.prompts)
+	}
 }
 
-func TestChatSessionUpdateConfigAppliesToCodexExec(t *testing.T) {
-	prev := runCodexExec
-	t.Cleanup(func() { runCodexExec = prev })
-	var got AgentProfile
-	runCodexExec = func(_ context.Context, _, _ string, p AgentProfile, emit func(string)) error {
-		got = p
-		emit("ok")
-		return nil
-	}
+func TestChatSessionUpdateConfigAppliesToCodexAppServer(t *testing.T) {
+	server := &fakeCodexServer{reply: "ok"}
+	prev := createCodexServer
+	t.Cleanup(func() { createCodexServer = prev })
+	createCodexServer = func() codexServer { return server }
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -120,7 +117,34 @@ func TestChatSessionUpdateConfigAppliesToCodexExec(t *testing.T) {
 	if _, err := sess.Prompt(ctx, "hello", nil); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
-	if got.Model != "gpt-5.3-codex" || got.Effort != "high" {
-		t.Fatalf("profile = %+v", got)
+	if server.lastProfile.Model != "gpt-5.3-codex" || server.lastProfile.Effort != "high" {
+		t.Fatalf("profile = %+v", server.lastProfile)
 	}
+}
+
+type fakeCodexServer struct {
+	starts      int
+	prompts     []string
+	lastProfile AgentProfile
+	reply       string
+	closed      bool
+}
+
+func (s *fakeCodexServer) Start(_ context.Context, _ string, profile AgentProfile) error {
+	s.starts++
+	s.lastProfile = profile
+	return nil
+}
+
+func (s *fakeCodexServer) Prompt(_ context.Context, text string, profile AgentProfile, emit func(string)) error {
+	s.prompts = append(s.prompts, text)
+	s.lastProfile = profile
+	if emit != nil {
+		emit(s.reply)
+	}
+	return nil
+}
+
+func (s *fakeCodexServer) Close() {
+	s.closed = true
 }

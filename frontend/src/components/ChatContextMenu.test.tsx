@@ -11,7 +11,7 @@ describe('ChatContextMenu', () => {
       value: { writeText },
     });
     const msg = document.createElement('div');
-    msg.className = 'nlux-comp-message';
+    msg.className = 'agent-chat-message';
     msg.textContent = 'DrawCalls 过高';
     document.body.appendChild(msg);
     const onClose = vi.fn();

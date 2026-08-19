@@ -1,5 +1,5 @@
 // Package llm 通过 ACP（Agent Client Protocol）接入外部 LLM Agent。
-// 协议层只用 acp-go-sdk：Codex 在进程内适配 `codex exec`，Cursor 等则 stdio 连接其官方 ACP 入口。
+// 协议层只用 acp-go-sdk：Codex 在进程内适配持久 app-server，Cursor 等则 stdio 连接其官方 ACP 入口。
 package llm
 
 import (

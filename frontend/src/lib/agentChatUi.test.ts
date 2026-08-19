@@ -1,23 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clampMenuPos,
-  clearComposerInput,
-  composerIsBusy,
   contextMenuFromEvent,
   copyText,
   elementPlainText,
   messageRootFrom,
   selectedText,
   selectElementText,
-  watchComposerSubmitClear,
 } from './agentChatUi';
-
-function composer(html = '<textarea>hello</textarea>') {
-  const root = document.createElement('div');
-  root.innerHTML = `<div class="nlux-comp-composer nlux-composer--typing">${html}</div>`;
-  document.body.appendChild(root);
-  return root;
-}
 
 describe('agentChatUi', () => {
   afterEach(() => {
@@ -26,35 +16,11 @@ describe('agentChatUi', () => {
     window.getSelection()?.removeAllRanges();
   });
 
-  it('clearComposerInput 清空并派发 input', () => {
-    const root = composer();
-    const ta = root.querySelector('textarea') as HTMLTextAreaElement;
-    const onInput = vi.fn();
-    ta.addEventListener('input', onInput);
-    expect(clearComposerInput(root)).toBe(true);
-    expect(ta.value).toBe('');
-    expect(onInput).toHaveBeenCalled();
-    expect(clearComposerInput(root)).toBe(false);
-  });
-
-  it('composer 进入 submitting 时自动清空', async () => {
-    const root = composer();
-    const stop = watchComposerSubmitClear(root);
-    const box = root.querySelector('.nlux-comp-composer') as HTMLElement;
-    box.classList.remove('nlux-composer--typing');
-    box.classList.add('nlux-composer--submitting');
-    expect(composerIsBusy(box)).toBe(true);
-    await vi.waitFor(() => {
-      expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
-    });
-    stop();
-  });
-
-  it('messageRootFrom 定位消息节点', () => {
+  it('messageRootFrom 定位 assistant-ui 消息节点', () => {
     const item = document.createElement('div');
-    item.className = 'nlux-comp-chatItem';
+    item.className = 'agent-chat-message agent-chat-message-assistant';
     const msg = document.createElement('div');
-    msg.className = 'nlux-comp-message';
+    msg.className = 'agent-chat-message-text';
     msg.textContent = '一段性能结论';
     item.appendChild(msg);
     document.body.appendChild(item);
@@ -64,7 +30,7 @@ describe('agentChatUi', () => {
 
   it('selectElementText 与 selectedText', () => {
     const msg = document.createElement('div');
-    msg.className = 'nlux-comp-message';
+    msg.className = 'agent-chat-message';
     msg.textContent = '可选中';
     document.body.appendChild(msg);
     selectElementText(msg);
@@ -88,14 +54,14 @@ describe('agentChatUi', () => {
   });
 
   it('contextMenuFromEvent 只在消息区弹出', () => {
-    const conv = document.createElement('div');
-    conv.className = 'nlux-conversation-container';
+    const viewport = document.createElement('div');
+    viewport.className = 'agent-chat-viewport';
     const msg = document.createElement('div');
-    msg.className = 'nlux-comp-message';
+    msg.className = 'agent-chat-message';
     msg.textContent = 'hi';
-    conv.appendChild(msg);
+    viewport.appendChild(msg);
     const ta = document.createElement('textarea');
-    document.body.append(conv, ta);
+    document.body.append(viewport, ta);
     expect(contextMenuFromEvent({ target: msg, clientX: 10, clientY: 20 })).toEqual({
       x: 10, y: 20, message: msg,
     });

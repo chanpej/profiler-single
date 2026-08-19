@@ -624,7 +624,6 @@ func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string
 		return "", errors.New("消息为空")
 	}
 	p.addAgentLog("Agent", "User → Agent", "prompt", message)
-	agentPrompt := "直接执行以下性能分析任务，不要回复确认或计划。先调用 MCP 工具 performance_session_summary；如需定位再调用帧或 CPU Hierarchy 工具。取得数据后在本回合给出结论、数据证据和按优先级排序的 Unity 2022 优化建议。\n\n用户任务：\n" + message
 	sess, err := p.ensureChat()
 	if err != nil {
 		p.addAgentLog("Agent", "System → User", "start", err.Error())
@@ -633,7 +632,7 @@ func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string
 	p.mu.Lock()
 	emit := p.emit
 	p.mu.Unlock()
-	result, err := sess.Prompt(ctx, agentPrompt, func(chunk string) {
+	result, err := sess.Prompt(ctx, message, func(chunk string) {
 		emit(AgentChunkEventName, AgentChunkEvent{Text: chunk})
 	})
 	if err != nil {
@@ -642,6 +641,18 @@ func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string
 	}
 	p.addAgentLog("Agent", "Agent → User", "response", result)
 	return result, nil
+}
+
+// ExportAgentChat 将 Agent Chat 会话以 UTF-8 Markdown 写入保存对话框选择的路径。
+func (p *PerfService) ExportAgentChat(path, content string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("导出 Agent Chat 会话失败：保存路径为空")
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("导出 Agent Chat 会话到 %q 失败：%w", path, err)
+	}
+	return nil
 }
 
 // AgentChatClose 结束当前 ACP 聊天会话。

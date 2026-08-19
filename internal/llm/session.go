@@ -15,7 +15,9 @@ import (
 	"unityperfagent/internal/procutil"
 )
 
-const chatSystemHint = `你是 Unity 移动游戏性能优化专家，目标平台为 Unity 2022（其他版本不需要考虑）。请用中文简洁回答。你可以使用 UnityPerfAgent MCP 工具查询当前抓取的帧、CPU Hierarchy、统计与规则分析；涉及具体性能结论时应先查询数据，不要臆测。`
+const chatSystemHint = `你是 Unity 移动游戏性能优化专家，目标平台为 Unity 2022（其他版本不需要考虑）。请用中文简洁回答。你可以使用 UnityPerfAgent MCP 工具查询当前抓取的帧、CPU Hierarchy、统计与规则分析；涉及具体性能结论时应先查询数据，不要臆测。
+
+这是一个持久会话：后续用户消息可能是对前文的追问，应结合已有上下文，仅查询完成当前请求所需的数据。用户指定帧号时，优先查询该帧及其 CPU Hierarchy；除非用户明确要求总体概览或上下文确实不足，否则不要重新进行全量性能概览。每次收到实际用户请求后，必须立即调用完成任务所需的 MCP 工具并在同一回合给出结论、数据证据以及按优先级排序的 Unity 2022 优化建议；不要只回复确认、复述请求或给出执行计划。`
 
 // ChatSession 是与 ACP Agent 的长连接多轮会话。
 // 一次 Start 对应一个 Agent 子进程与一条 ACP session，后续 Prompt 复用同一会话。
@@ -107,7 +109,7 @@ func (s *ChatSession) Start(ctx context.Context) error {
 func (s *ChatSession) startInProcessCodex(ctx context.Context) error {
 	clientToAgentR, clientToAgentW := io.Pipe()
 	agentToClientR, agentToClientW := io.Pipe()
-	agent := newCodexACPAgent(s.cfg.cwd(), runCodexExec)
+	agent := newCodexACPAgent(s.cfg.cwd(), createCodexServer)
 	agent.setProfile(s.cfg.Launch())
 	conn := acp.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
 	agent.setConn(conn)
@@ -126,6 +128,11 @@ func (s *ChatSession) startInProcessCodex(ctx context.Context) error {
 		s.Close()
 		return err
 	}
+	// Codex app-server receives chatSystemHint as thread/start baseInstructions,
+	// so every turn can forward the user's message without prompt wrapping.
+	s.mu.Lock()
+	s.first = false
+	s.mu.Unlock()
 	return nil
 }
 
@@ -162,7 +169,7 @@ func (s *ChatSession) Models() []AgentModel {
 	return append([]AgentModel(nil), s.models...)
 }
 
-// UpdateConfig 更新当前会话使用的 Agent 配置（进程内 Codex 的下次 exec 立即生效）。
+// UpdateConfig 更新当前会话使用的 Agent 配置（进程内 Codex 的下个 turn 立即生效）。
 func (s *ChatSession) UpdateConfig(cfg Config) {
 	s.mu.Lock()
 	s.cfg = cfg
@@ -201,9 +208,9 @@ func (s *ChatSession) Prompt(ctx context.Context, text string, onChunk func(stri
 		return "", fmt.Errorf("llm: chat session not started")
 	}
 	if first {
-		// ACP exposes no system-role content to codex exec. The service already
-		// turns the user's first message into an executable MCP task, so avoid
-		// prepending a second instruction block that Codex may only acknowledge.
+		// ACP has no system-role content. Attach the fixed session instructions
+		// once to the first prompt; later user messages remain untouched.
+		text = chatSystemHint + "\n\n用户首个请求：\n" + text
 		s.mu.Lock()
 		s.first = false
 		s.mu.Unlock()

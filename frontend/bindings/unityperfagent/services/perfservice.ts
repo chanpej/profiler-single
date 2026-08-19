@@ -101,6 +101,13 @@ export function DiscoverPlayers(): $CancellablePromise<unityprofiler$0.PlayerInf
 }
 
 /**
+ * ExportAgentChat 将 Agent Chat 会话以 UTF-8 Markdown 写入保存对话框选择的路径。
+ */
+export function ExportAgentChat(path: string, content: string): $CancellablePromise<void> {
+    return $Call.ByID(1380440508, path, content);
+}
+
+/**
  * ExportCapture 不再生成自定义 UPAC 容器。
  * Unity Editor 的 .data 是其私有的已解码离线帧格式，不能通过重命名或封装
  * PlayerConnection 的 PD3U 原始流生成。为避免输出无法被 Unity 打开的伪 .data，

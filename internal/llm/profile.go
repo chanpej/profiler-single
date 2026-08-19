@@ -23,7 +23,7 @@ type AgentProfile struct {
 
 // DefaultAgents 返回内置预设：Codex 与 Cursor CLI。
 //
-// Codex：本进程用 acp-go-sdk 适配 `codex exec`（不经过 npx / Node ACP 适配包）。
+// Codex：本进程用 acp-go-sdk 适配持久 `codex app-server`（不经过 npx / Node ACP 适配包）。
 //
 // Cursor CLI：官方 ACP 入口 `agent acp`
 //

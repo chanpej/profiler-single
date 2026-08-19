@@ -1,205 +1,167 @@
-/* NLUX nova 在组件里后加载，必须在其后覆盖，才能与主界面深色工具风对齐。 */
-
-.agent-chat-body .nlux-AiChat-root.nlux-theme-nova,
-.agent-chat-body .nlux-AiChat-root.nlux-theme-nova[data-color-scheme='dark'] {
-  --nlux-nova--FontFamily: inherit;
-  --nlux-nova--MonoFontFamily: var(--mono);
-  --nlux-ChatRoom--BackgroundColor: var(--bg);
-  --nlux-ChatRoom--BorderColor: transparent;
-  --nlux-ChatRoom--BorderRadius: 0;
-  --nlux-ChatRoom--BorderWidth: 0;
-  --nlux-ChatRoom--TextColor: var(--text);
-  --nlux-ChatRoom--FontFamily: inherit;
-  --nlux-ChatRoom--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-ChatRoom--FontWeight: 400;
-  --nlux-ChatRoom--LineHeight: 1.45;
-  --nlux-ChatRoom--Padding: 8px;
-  --nlux-ChatRoom-Divider--Color: var(--border);
-  --nlux-ChatRoom-Loader--Color: var(--accent);
-  --nlux-ChatItem-ParticipantName--Color: var(--text-dim);
-  --nlux-ChatItem-ParticipantName--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-ChatItem-Message-BubbleLayout--BorderRadius: 0;
-  --nlux-ChatItem-Avatar--BorderRadius: 0;
-  --nlux-HumanMessage--BackgroundColor: var(--bg-hover);
-  --nlux-HumanMessage--BorderColor: var(--border);
-  --nlux-HumanMessage--TextColor: var(--text);
-  --nlux-AiMessage--BackgroundColor: var(--bg-panel);
-  --nlux-AiMessage--BorderColor: var(--border);
-  --nlux-AiMessage--TextColor: var(--text);
-  --nlux-composer-container--BackgroundColor: var(--bg-panel);
-  --nlux-PromptInput--BackgroundColor: var(--bg);
-  --nlux-PromptInput--BorderColor: var(--border);
-  --nlux-PromptInput--BorderRadius: 0;
-  --nlux-PromptInput--TextColor: var(--text);
-  --nlux-PromptInput--FontFamily: inherit;
-  --nlux-PromptInput--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-PromptInput-Height: 32px;
-  --nlux-PromptInput-Max-Height: 72px;
-  --nlux-SubmitButton--Width: 28px;
-  --nlux-SubmitButton--BorderRadius: 0;
-  --nlux-Composer--Gap: 6px;
-  --nlux-PromptInput-Active--BackgroundColor: var(--bg);
-  --nlux-PromptInput-Active--BorderColor: var(--accent);
-  --nlux-PromptInput-Active--TextColor: var(--text);
-  --nlux-PromptInput-Placeholder--TextColor: var(--text-dim);
-  --nlux-PromptInput-Focus-Outline--Width: 0;
-  --nlux-SubmitButton--BackgroundColor: rgba(56, 189, 248, 0.16);
-  --nlux-SubmitButton--BorderColor: rgba(56, 189, 248, 0.4);
-  --nlux-SubmitButton--BorderRadius: 0;
-  --nlux-SubmitButton--TextColor: var(--accent);
-  --nlux-SubmitButton-Active--BackgroundColor: var(--bg-hover);
-  --nlux-SubmitButton-Active--BorderColor: var(--accent);
-  --nlux-SubmitButton-Active--TextColor: var(--accent);
-  --nlux-SubmitButton-Focus-Outline--Width: 0;
-  --nlux-CodeBlock--BackgroundColor: var(--bg);
-  --nlux-CodeBlock--BorderColor: var(--border);
-  --nlux-CodeBlock--BorderRadius: 0;
-  --nlux-CodeBlock--FontFamily: var(--mono);
-  --nlux-CodeBlock--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-CodeBlock--TextColor: var(--text);
-  --nlux-InlineCode--BackgroundColor: var(--bg-hover);
-  --nlux-InlineCode--BorderColor: var(--border);
-  --nlux-InlineCode--BorderRadius: 0;
-  --nlux-InlineCode--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-WelcomeMessage-Avatar--Width: 48px;
-  --nlux-WelcomeMessage-PersonaName--FontSize: calc(var(--agent-chat-font-size, 12px) + 2px);
-  --nlux-WelcomeMessage-Text--FontSize: var(--agent-chat-font-size, 12px);
-  --nlux-Exceptions--BorderRadius: 0;
-  --nlux-ConversationStarter--BorderRadius: 0;
-}
-
-.agent-chat-body .nlux-AiChat-root,
-.agent-chat-body .nlux-AiChat-root > .nlux-chatRoom-container,
-.agent-chat-body .nlux-comp-message,
-.agent-chat-body .nlux-comp-composer > textarea,
-.agent-chat-body .nlux-comp-composer > button,
-.agent-chat-body .nlux-comp-avatar,
-.agent-chat-body .nlux-markdown-container > .code-block,
-.agent-chat-body .nlux-markdown-container code {
-  border-radius: 0 !important;
-}
-
-.agent-chat-body .nlux-composer-container {
-  flex-direction: column !important;
-  align-items: stretch !important;
-  min-height: 0 !important;
-  overflow: visible;
-  padding-bottom: 6px;
-}
-
-.agent-chat-body .nlux-comp-composer {
-  flex-wrap: nowrap !important;
-  align-items: flex-end !important;
-  padding: 0 8px 2px;
-  gap: 6px;
-  min-height: 32px;
-}
-
-.agent-chat-body .nlux-comp-composer > textarea {
-  min-height: 28px !important;
-  max-height: 72px !important;
-  height: auto !important;
-  padding: 6px 8px !important;
-}
-
-.agent-chat-body .nlux-comp-composer > button {
-  flex: 0 0 28px !important;
-  width: 28px !important;
-  height: 28px !important;
-  min-width: 28px !important;
-  min-height: 28px !important;
-  align-self: flex-end;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  padding: 0 !important;
-  margin: 0;
-  box-sizing: border-box !important;
-  line-height: 0;
-  overflow: hidden;
-}
-
-.agent-chat-body .nlux-comp-composer > textarea:focus {
-  outline: none;
-}
-
-.agent-chat-body .nlux-AiChat-root > .nlux-chatRoom-container > .nlux-launchPad-container,
-.agent-chat-body .nlux-AiChat-root > .nlux-chatRoom-container > .nlux-conversation-container {
-  height: auto !important;
-  flex: 1 1 auto;
+.agent-chat-thread {
+  flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--agent-chat-font-size, 12px);
+  line-height: 1.45;
 }
 
-.agent-chat-body .nlux-launchPad-container {
-  display: flex !important;
+.agent-chat-viewport {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  padding: 8px;
+}
+
+.agent-chat-messages {
+  flex: 1 0 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-chat-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  color: var(--text-dim);
+  gap: 6px;
+  text-align: center;
 }
 
-.agent-chat-body .nlux-launchPad-container > .nlux-comp-welcomeMessage {
-  flex: none;
-  height: auto;
-  justify-content: center;
-  align-items: center;
-}
-
-.agent-chat-body .nlux-conversationStarters-container:empty {
-  display: none !important;
-}
-
-.agent-chat-body .nlux-comp-avatar {
-  display: flex !important;
+.agent-chat-welcome-icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.agent-chat-body .nlux-comp-welcomeMessage > .nlux-comp-avatar {
   width: 48px;
   height: 48px;
-  border: none;
+  color: var(--accent);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
 }
 
-.agent-chat-body .nlux-comp-welcomeMessage > .nlux-comp-avatar svg {
-  width: 28px;
-  height: 28px;
-}
+.agent-chat-welcome strong { color: var(--text); font-size: calc(var(--agent-chat-font-size, 12px) + 2px); }
+.agent-chat-welcome p { margin: 0; }
 
-.agent-chat-body .nlux-conversation-container,
-.agent-chat-body .nlux-comp-message,
-.agent-chat-body .nlux-markdown-container,
-.agent-chat-body .nlux-comp-composer > textarea {
+.agent-chat-message {
+  max-width: 92%;
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
   user-select: text;
   -webkit-user-select: text;
-  cursor: text;
 }
 
-.agent-chat-body .nlux-comp-composer > button > .nlux-comp-sendIcon,
-.agent-chat-body .nlux-comp-composer > button > .nlux-comp-cancelIcon {
+.agent-chat-message-user { margin-left: auto; background: var(--bg-hover); }
+.agent-chat-message-assistant { margin-right: auto; background: var(--bg-panel); }
+.agent-chat-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-chat-text-segment + .agent-chat-text-segment { margin-top: 6px; }
+.agent-chat-error { display: block; margin-top: 6px; color: #f87171; }
+
+.agent-chat-tool-group {
+  margin: 5px 0;
+  border: 1px solid rgba(56, 189, 248, 0.24);
+  background: rgba(56, 189, 248, 0.07);
+  white-space: normal;
+}
+
+.agent-chat-tool-group summary {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 16px !important;
-  height: 16px !important;
-  max-width: 16px;
-  margin: 0;
+  gap: 5px;
+  min-height: 26px;
+  padding: 4px 7px;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
 }
 
-.agent-chat-body .nlux-comp-composer.nlux-composer--submitting > button > .nlux-comp-sendIcon,
-.agent-chat-body .nlux-comp-composer.nlux-composer--waiting > button > .nlux-comp-sendIcon,
-.agent-chat-body .nlux-comp-composer.nlux-composer--submitting > button > .nlux-comp-messageLoader,
-.agent-chat-body .nlux-comp-composer.nlux-composer--waiting > button > .nlux-comp-messageLoader {
-  display: none !important;
+.agent-chat-tool-group summary span {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
-.agent-chat-body .nlux-comp-composer.nlux-composer--submitting > button::after,
-.agent-chat-body .nlux-comp-composer.nlux-composer--waiting > button::after {
-  content: '';
-  width: 10px;
-  height: 10px;
-  background: currentColor;
-  display: block;
+.agent-chat-tool-entries {
+  display: grid;
+  gap: 5px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(56, 189, 248, 0.18);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+}
+
+.agent-chat-loading svg { animation: agent-chat-spin 1s linear infinite; }
+
+.agent-chat-footer {
   flex: none;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
 }
+
+@keyframes agent-chat-spin { to { transform: rotate(360deg); } }
+
+.agent-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 8px 2px;
+}
+
+.agent-composer-input {
+  min-width: 0;
+  flex: 1;
+  min-height: 28px;
+  max-height: 72px;
+  resize: none;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.agent-composer-input:focus { border-color: var(--accent); }
+.agent-composer-input::placeholder { color: var(--text-dim); }
+
+.agent-composer-send {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 0;
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.agent-composer-send:disabled { cursor: not-allowed; opacity: 0.45; }
+.agent-composer-send:not(:disabled):hover { background: var(--bg-hover); border-color: var(--accent); }
 
 .agent-chat-context-menu {
   position: fixed;
@@ -223,11 +185,5 @@
   cursor: pointer;
 }
 
-.agent-chat-context-item:hover:not(:disabled) {
-  background: rgba(56, 189, 248, 0.14);
-}
-
-.agent-chat-context-item:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+.agent-chat-context-item:hover:not(:disabled) { background: rgba(56, 189, 248, 0.14); }
+.agent-chat-context-item:disabled { opacity: 0.45; cursor: not-allowed; }

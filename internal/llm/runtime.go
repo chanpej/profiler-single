@@ -116,8 +116,8 @@ func CodexExecArgs(prompt string, p AgentProfile) []string {
 }
 
 // codexMCPConfigArgs converts ACP stdio MCP declarations into Codex's native
-// `mcp_servers` configuration. The in-process ACP adapter receives these at
-// session/new, then each `codex exec` child inherits the same data tools.
+// `mcp_servers` configuration. Agent Chat supplies it once when starting the
+// persistent app-server; direct CLI validation uses the same conversion.
 func codexMCPConfigArgs(servers []acp.McpServer) []string {
 	var out []string
 	for _, server := range servers {

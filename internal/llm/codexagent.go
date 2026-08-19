@@ -12,11 +12,9 @@ import (
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
-
-	"unityperfagent/internal/procutil"
 )
 
-// useInProcessCodex 表示用 acp-go-sdk 在进程内适配 Codex CLI（codex exec），
+// useInProcessCodex 表示用 acp-go-sdk 在进程内适配持久 Codex app-server，
 // 不再经过 npx / @agentclientprotocol/codex-acp。
 func useInProcessCodex(p AgentProfile) bool {
 	base := strings.ToLower(filepath.Base(strings.TrimSpace(p.Command)))
@@ -62,20 +60,21 @@ func (stubACPAgent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (
 
 type codexACPAgent struct {
 	stubACPAgent
-	run     codexExecFn
-	dir     string
-	profile AgentProfile
-	conn    *acp.AgentSideConnection
-	mu      sync.Mutex
+	newServer codexServerFactory
+	server    codexServer
+	dir       string
+	profile   AgentProfile
+	conn      *acp.AgentSideConnection
+	mu        sync.Mutex
 }
 
-type codexExecFn func(ctx context.Context, dir, prompt string, profile AgentProfile, emit func(string)) error
+var createCodexServer = newCodexAppServerFactory()
 
-func newCodexACPAgent(dir string, run codexExecFn) *codexACPAgent {
-	if run == nil {
-		run = runCodexExec
+func newCodexACPAgent(dir string, factory codexServerFactory) *codexACPAgent {
+	if factory == nil {
+		factory = createCodexServer
 	}
-	return &codexACPAgent{run: run, dir: dir}
+	return &codexACPAgent{newServer: factory, dir: dir}
 }
 
 func (a *codexACPAgent) setConn(c *acp.AgentSideConnection) {
@@ -108,14 +107,50 @@ func (a *codexACPAgent) Initialize(context.Context, acp.InitializeRequest) (acp.
 	}, nil
 }
 
-func (a *codexACPAgent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+func (a *codexACPAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
 	a.mu.Lock()
+	if a.server != nil {
+		a.mu.Unlock()
+		return acp.NewSessionResponse{}, fmt.Errorf("llm: codex session already started")
+	}
 	if p.Cwd != "" {
 		a.dir = p.Cwd
 	}
+	dir := a.dir
+	profile := a.profile
+	profile.mcpServers = append([]acp.McpServer(nil), p.McpServers...)
+	factory := a.newServer
+	a.mu.Unlock()
+
+	server := factory()
+	if server == nil {
+		return acp.NewSessionResponse{}, fmt.Errorf("llm: codex server factory returned nil")
+	}
+	if err := server.Start(ctx, dir, profile); err != nil {
+		server.Close()
+		return acp.NewSessionResponse{}, err
+	}
+	a.mu.Lock()
+	if a.server != nil {
+		a.mu.Unlock()
+		server.Close()
+		return acp.NewSessionResponse{}, fmt.Errorf("llm: codex session already started")
+	}
 	a.profile.mcpServers = append([]acp.McpServer(nil), p.McpServers...)
+	a.server = server
 	a.mu.Unlock()
 	return acp.NewSessionResponse{SessionId: acp.SessionId("codex-sess")}, nil
+}
+
+func (a *codexACPAgent) CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+	a.mu.Lock()
+	server := a.server
+	a.server = nil
+	a.mu.Unlock()
+	if server != nil {
+		server.Close()
+	}
+	return acp.CloseSessionResponse{}, nil
 }
 
 func (a *codexACPAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
@@ -125,14 +160,13 @@ func (a *codexACPAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.Pr
 	}
 	a.mu.Lock()
 	conn := a.conn
-	dir := a.dir
-	run := a.run
+	server := a.server
 	profile := a.profile
 	a.mu.Unlock()
-	if conn == nil || run == nil {
+	if conn == nil || server == nil {
 		return acp.PromptResponse{}, fmt.Errorf("llm: codex adapter not ready")
 	}
-	err := run(ctx, dir, prompt, profile, func(chunk string) {
+	err := server.Prompt(ctx, prompt, profile, func(chunk string) {
 		_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 			SessionId: p.SessionId,
 			Update:    acp.UpdateAgentMessageText(chunk),
@@ -157,44 +191,6 @@ func promptText(p acp.PromptRequest) string {
 	return strings.TrimSpace(b.String())
 }
 
-var runCodexExec codexExecFn = defaultRunCodexExec
-
-func defaultRunCodexExec(ctx context.Context, dir, prompt string, profile AgentProfile, emit func(string)) error {
-	exe, argv, err := ResolveLaunch("codex", CodexExecArgs(prompt, profile))
-	if err != nil {
-		return err
-	}
-	cmd := procutil.CommandContext(ctx, exe, argv...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("llm: codex stdout: %w", err)
-	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("llm: start codex: %w", err)
-	}
-	got := scanCodexJSONL(stdout, emit)
-	waitErr := cmd.Wait()
-	if got == 0 {
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = "codex exec 没有返回文本"
-		}
-		if waitErr != nil {
-			return fmt.Errorf("llm: %s (%v)", msg, waitErr)
-		}
-		return fmt.Errorf("llm: %s", msg)
-	}
-	if waitErr != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return nil
-}
-
 func scanCodexJSONL(r io.Reader, emit func(string)) int {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -207,6 +203,9 @@ func scanCodexJSONL(r io.Reader, emit func(string)) int {
 			emit(text)
 			n++
 		}
+	}
+	if sc.Err() != nil {
+		return n
 	}
 	return n
 }

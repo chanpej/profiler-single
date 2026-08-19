@@ -16,12 +16,16 @@ import (
 // fakeAgent 是进程内的假 ACP Agent，实现 acp.Agent 接口。
 // Prompt 时把收到的用户消息记录下来，并按配置流式返回回复文本。
 type fakeAgent struct {
-	conn       *acp.AgentSideConnection
-	replyParts []string
-	lastPrompt string
+	conn            *acp.AgentSideConnection
+	replyParts      []string
+	lastPrompt      string
+	prompts         []string
+	initializeCalls int
+	newSessionCalls int
 }
 
 func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
+	a.initializeCalls++
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentInfo:       &acp.Implementation{Name: "fake-agent", Version: "0.0.1"},
@@ -32,12 +36,14 @@ func (a *fakeAgent) Initialize(ctx context.Context, p acp.InitializeRequest) (ac
 }
 
 func (a *fakeAgent) NewSession(ctx context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	a.newSessionCalls++
 	return acp.NewSessionResponse{SessionId: acp.SessionId("sess-1")}, nil
 }
 
 func (a *fakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
 	if len(p.Prompt) > 0 && p.Prompt[0].Text != nil {
 		a.lastPrompt = p.Prompt[0].Text.Text
+		a.prompts = append(a.prompts, a.lastPrompt)
 	}
 	for _, part := range a.replyParts {
 		if err := a.conn.SessionUpdate(ctx, acp.SessionNotification{
@@ -221,8 +227,8 @@ func TestChatSessionPromptOverInProcAgent(t *testing.T) {
 	if strings.Join(chunks, "") != out {
 		t.Fatalf("chunks = %q, out = %q", chunks, out)
 	}
-	if !strings.Contains(agent.lastPrompt, "卡顿原因？") {
-		t.Fatalf("first prompt should preserve the executable task: %q", agent.lastPrompt)
+	if !strings.Contains(agent.lastPrompt, chatSystemHint) || !strings.Contains(agent.lastPrompt, "卡顿原因？") {
+		t.Fatalf("first prompt missing initialization instructions: %q", agent.lastPrompt)
 	}
 
 	agent.replyParts = []string{"第二轮。"}
@@ -233,8 +239,41 @@ func TestChatSessionPromptOverInProcAgent(t *testing.T) {
 	if out2 != "第二轮。" {
 		t.Fatalf("out2 = %q", out2)
 	}
-	if strings.Contains(agent.lastPrompt, chatSystemHint) {
-		t.Fatalf("second prompt should not repeat system hint: %q", agent.lastPrompt)
+	if agent.lastPrompt != "还有呢？" {
+		t.Fatalf("second prompt = %q, want raw follow-up", agent.lastPrompt)
+	}
+}
+
+func TestChatSessionInitializesInstructionsOnce(t *testing.T) {
+	agent := &fakeAgent{replyParts: []string{"已收到。"}}
+	w, r := startInProcAgent(t, agent)
+	sess := NewChatSession(Config{AgentCommand: "in-proc"})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := sess.startOver(ctx, w, r); err != nil {
+		t.Fatalf("startOver: %v", err)
+	}
+
+	if _, err := sess.Prompt(ctx, "分析 frame 30", nil); err != nil {
+		t.Fatalf("first Prompt: %v", err)
+	}
+	if _, err := sess.Prompt(ctx, "给出优化方案", nil); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+
+	if agent.initializeCalls != 1 || agent.newSessionCalls != 1 {
+		t.Fatalf("initialize=%d newSession=%d, want one each", agent.initializeCalls, agent.newSessionCalls)
+	}
+	if len(agent.prompts) != 2 {
+		t.Fatalf("prompts = %#v", agent.prompts)
+	}
+	for _, expected := range []string{chatSystemHint, "必须立即调用完成任务所需的 MCP 工具", "不要只回复确认", "分析 frame 30"} {
+		if !strings.Contains(agent.prompts[0], expected) {
+			t.Fatalf("first prompt missing %q: %q", expected, agent.prompts[0])
+		}
+	}
+	if agent.prompts[1] != "给出优化方案" {
+		t.Fatalf("follow-up prompt = %q, want raw user message", agent.prompts[1])
 	}
 }
 
@@ -339,12 +378,7 @@ func TestProbeCodexGoAdapter(t *testing.T) {
 	if _, err := exec.LookPath("codex"); err != nil {
 		t.Skip("PATH 上没有 codex")
 	}
-	prev := runCodexExec
-	t.Cleanup(func() { runCodexExec = prev })
-	runCodexExec = func(context.Context, string, string, AgentProfile, func(string)) error {
-		t.Fatal("probe 不应调用 codex exec")
-		return nil
-	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	r := Probe(ctx, Config{ActiveID: "codex", Agents: DefaultAgents()})

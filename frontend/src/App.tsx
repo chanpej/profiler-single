@@ -9,6 +9,7 @@ import { loadAgentCollapsed, loadAgentWidth, saveAgentCollapsed } from './lib/ag
 import { applyChatFontSize, loadChatFontSize } from './lib/chatAppearance';
 import { emptyLLMConfig, isAgentConfigured, normalizeLLMConfig, updateAgent, withActiveAgent } from './lib/llmConfig';
 import { applyLLMRuntime, loadLLMRuntime, saveLLMRuntime } from './lib/llmRuntimeStorage';
+import { chooseAgentChatExportPath } from './lib/agentChatExport';
 import { initialImportProgress } from './lib/importProgress';
 import type { AgentProfile, ImportProgressEvent, LLMConfig, OverlayId, Stats, Status } from './types';
 import { TitleBar } from './components/TitleBar';
@@ -191,6 +192,14 @@ function App() {
   const onCallStacks = (on: boolean) => {
     guard(() => api.setCallStacks(on));
   };
+  const onExportAgentChat = useCallback(async (filename: string, content: string) => {
+    try {
+      const path = await chooseAgentChatExportPath(filename);
+      if (path) await api.exportAgentChat(path, content);
+    } catch (e) {
+      if (!isUserCancelled(e)) setError(formatErrorMessage(e));
+    }
+  }, []);
 
   const llmReady = isAgentConfigured(llm);
 
@@ -248,6 +257,7 @@ function App() {
           listModels={api.listAgentModels}
           agentChatSend={api.agentChatSend}
           onChunk={api.onAgentChunk}
+          exportSession={onExportAgentChat}
         />
       </div>
       <StatusBar status={status} busy={busy} agentName={llmReady ? (llm.agents.find((a) => a.id === llm.activeId)?.name ?? '') : ''} />

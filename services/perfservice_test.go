@@ -134,6 +134,29 @@ func TestAgentChatSendEmptyMessage(t *testing.T) {
 	}
 }
 
+func TestExportAgentChatRoundTrip(t *testing.T) {
+	svc := newTestService()
+	path := filepath.Join(t.TempDir(), "agent-chat.md")
+	content := "# Agent Chat\n\n**用户：** 请分析这一帧。\n\n**Agent：** CPU 主线程耗时较高。\n"
+	if err := svc.ExportAgentChat(path, content); err != nil {
+		t.Fatalf("ExportAgentChat: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("content = %q, want %q", got, content)
+	}
+}
+
+func TestExportAgentChatRejectsBlankPath(t *testing.T) {
+	svc := newTestService()
+	if err := svc.ExportAgentChat(" \t\n", "# Agent Chat\n"); err == nil || !strings.Contains(err.Error(), "路径为空") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestSetLLMConfigClosesChat(t *testing.T) {
 	svc := newTestService()
 	svc.SetLLMConfig(llm.Config{AgentCommand: "gemini"})

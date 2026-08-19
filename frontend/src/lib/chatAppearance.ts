@@ -28,7 +28,7 @@ export function saveChatFontSize(n: number): void {
   }
 }
 
-/** 把字号写到根节点 CSS 变量，NLUX 与主界面共用。 */
+/** 把字号写到根节点 CSS 变量，聊天区与主界面共用。 */
 export function applyChatFontSize(n: number): void {
   const px = `${clampChatFontSize(n)}px`;
   document.documentElement.style.setProperty('--agent-chat-font-size', px);

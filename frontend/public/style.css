@@ -1327,22 +1327,9 @@ code {
 .agent-toolbar-model { max-width: 128px; }
 .agent-toolbar-effort { max-width: 64px; }
 
-.agent-chat-body .nlux-comp-composer { flex-wrap: nowrap; }
-.agent-composer-toolbar-slot {
-  width: 100%;
-  flex: none;
-  display: flex;
-  align-items: center;
-}
-
-.agent-chat-body .nlux-root,
-.agent-chat-body .nlux-AiChat-root {
+.agent-chat-body .agent-chat-thread {
   flex: 1;
   min-height: 0;
-  height: 100%;
-  border: none !important;
-  background: var(--bg) !important;
-  font-family: inherit !important;
 }
 
 .spin { animation: spin 1s linear infinite; }
