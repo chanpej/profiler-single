@@ -8,6 +8,7 @@ export {
 
 export type {
     AgentChunkEvent,
+    AgentLogEntry,
     ImportProgressEvent,
     Status,
     TickEvent

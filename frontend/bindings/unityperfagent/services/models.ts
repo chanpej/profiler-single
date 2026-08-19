@@ -13,6 +13,18 @@ export interface AgentChunkEvent {
 }
 
 /**
+ * AgentLogEntry records a complete Agent or MCP interaction. Payload is kept as
+ * JSON/text so the native log window can show the exact data exchanged.
+ */
+export interface AgentLogEntry {
+    "time": string;
+    "source": string;
+    "direction": string;
+    "method": string;
+    "payload": string;
+}
+
+/**
  * ImportProgressEvent 是加载存档时的解析进度。
  */
 export interface ImportProgressEvent {

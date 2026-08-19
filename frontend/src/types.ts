@@ -181,6 +181,15 @@ export interface AgentModelOption {
   label: string;
 }
 
+/** 一条 Agent 或嵌入式 MCP Server 的完整交互记录。 */
+export interface AgentLogEntry {
+  time: string;
+  source: string;
+  direction: string;
+  method: string;
+  payload: string;
+}
+
 export type OverlayId = 'frames' | 'analysis' | 'settings';
 
 export type ProfilerModuleId =

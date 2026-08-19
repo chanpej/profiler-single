@@ -203,6 +203,7 @@ function App() {
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}
         onSettings={() => setOverlay('settings')}
+        onOpenAgentLog={() => { api.openAgentLog().catch((e) => setError(formatErrorMessage(e))); }}
         onToggleAgent={onToggleAgent}
         agentCollapsed={agentCollapsed}
       />

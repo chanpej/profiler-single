@@ -109,9 +109,12 @@ func (a *codexACPAgent) Initialize(context.Context, acp.InitializeRequest) (acp.
 }
 
 func (a *codexACPAgent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewSessionResponse, error) {
+	a.mu.Lock()
 	if p.Cwd != "" {
 		a.dir = p.Cwd
 	}
+	a.profile.mcpServers = append([]acp.McpServer(nil), p.McpServers...)
+	a.mu.Unlock()
 	return acp.NewSessionResponse{SessionId: acp.SessionId("codex-sess")}, nil
 }
 
@@ -226,16 +229,59 @@ func extractCodexTexts(line []byte) []string {
 	}
 	if item, ok := ev["item"].(map[string]any); ok {
 		kind := strings.ToLower(stringField(item, "type") + " " + stringField(item, "item_type"))
-		if strings.Contains(kind, "agent_message") || strings.Contains(kind, "message") {
+		switch {
+		case strings.Contains(kind, "agent_message") || strings.Contains(kind, "message"):
 			if t := stringField(item, "text"); t != "" {
 				out = append(out, t)
 			}
 			if t := stringField(item, "delta"); t != "" {
 				out = append(out, t)
 			}
+		case strings.Contains(kind, "reasoning"):
+			if t := conciseCodexReasoning(item); t != "" {
+				out = append(out, "\n\n【思考摘要】"+t)
+			}
+		case isCodexMCPTool(kind):
+			if t := codexMCPProgress(stringField(ev, "type"), item); t != "" {
+				out = append(out, "\n\n"+t)
+			}
 		}
 	}
 	return out
+}
+
+func isCodexMCPTool(kind string) bool {
+	return strings.Contains(kind, "mcp") && (strings.Contains(kind, "tool") || strings.Contains(kind, "call"))
+}
+
+func codexMCPProgress(eventType string, item map[string]any) string {
+	name := strings.Trim(strings.Join([]string{
+		strings.TrimSpace(stringField(item, "server")),
+		strings.TrimSpace(stringField(item, "tool")),
+	}, "."), ".")
+	if name == "" {
+		name = strings.TrimSpace(stringField(item, "name"))
+	}
+	if name == "" {
+		name = "性能数据工具"
+	}
+	if strings.Contains(strings.ToLower(eventType), "completed") {
+		return "【MCP 工具】" + name + " 已返回结果。"
+	}
+	return "【MCP 工具】正在调用 " + name + "。"
+}
+
+func conciseCodexReasoning(item map[string]any) string {
+	text := strings.TrimSpace(stringField(item, "text"))
+	if text == "" {
+		text = strings.TrimSpace(stringField(item, "summary"))
+	}
+	const maxRunes = 1200
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return text
 }
 
 func looksLikeMessage(ev map[string]any) bool {

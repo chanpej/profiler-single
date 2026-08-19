@@ -32,7 +32,23 @@ describe('bindAgentStream', () => {
     expect(obs.errors).toHaveLength(0);
   });
 
-  it('没有 chunk 时回退到完整文本', async () => {
+  it('完成时补齐事件队列中尚未送达的尾部文本', async () => {
+    const handlers: Array<(t: string) => void> = [];
+    const send = vi.fn().mockImplementation(async () => {
+      handlers.forEach((h) => h('正在读取性能数据。'));
+      return '正在读取性能数据。\n\n最终优化建议';
+    });
+    const onChunk = (h: (text: string) => void) => {
+      handlers.push(h);
+      return () => {};
+    };
+    const obs = observer();
+    bindAgentStream(send, onChunk)('q', obs);
+    await vi.waitFor(() => expect(obs.done).toBe(true));
+    expect(obs.chunks.join('')).toBe('正在读取性能数据。\n\n最终优化建议');
+  });
+
+  it('没有 chunk 时转发完整文本', async () => {
     const send = vi.fn().mockResolvedValue('整段回复');
     const onChunk = () => () => {};
     const obs = observer();

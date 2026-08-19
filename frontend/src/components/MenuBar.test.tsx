@@ -24,6 +24,7 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: '文件' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '视图' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '诊断' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Agent Log' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '设置' })).toBeInTheDocument();
   });
 
@@ -58,13 +59,16 @@ describe('MenuBar', () => {
     expect(onToggleAgent).toHaveBeenCalled();
   });
 
-  it('诊断与设置直接打开对应面板', async () => {
+  it('诊断、Agent Log 与设置直接触发对应操作', async () => {
     const onAnalysis = vi.fn();
     const onSettings = vi.fn();
-    renderBar({ onAnalysis, onSettings });
+    const onOpenAgentLog = vi.fn();
+    renderBar({ onAnalysis, onSettings, onOpenAgentLog });
     await userEvent.click(screen.getByRole('menuitem', { name: '诊断' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Agent Log' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '设置' }));
     expect(onAnalysis).toHaveBeenCalled();
+    expect(onOpenAgentLog).toHaveBeenCalled();
     expect(onSettings).toHaveBeenCalled();
   });
 });

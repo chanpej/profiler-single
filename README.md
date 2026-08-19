@@ -77,6 +77,20 @@ frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数�
 
 诊断时会把规则分析报告（JSON）交给 Agent，返回中文诊断结论与优化建议。
 
+### MCP 性能数据工具
+
+每次创建 Agent 会话时，应用会通过 ACP 的 `session/new.mcpServers` 注入内置
+stdio MCP Server。Agent 可按需查询当前内存中的实时采集数据或已加载的 Unity 2022
+`.data` 帧数据，而不是只依赖预先生成的规则报告：
+
+- `performance_session_summary`：连接状态、聚合指标与规则分析；
+- `performance_frames`：范围帧摘要（单次最多 200 帧）；
+- `performance_frame` / `performance_cpu_hierarchy`：单帧完整计数器及 CPU 层级；
+- `performance_analysis`：重新运行内置规则分析。
+
+MCP bridge 只监听 `127.0.0.1`，并使用每次运行生成的令牌鉴权。菜单栏的
+**Agent Log** 会打开独立原生窗口，显示 Agent 对话和 MCP 请求/响应的完整 payload。
+
 ## 开发
 
 ```bash

@@ -1,8 +1,13 @@
 package llm
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	acp "github.com/coder/acp-go-sdk"
 )
 
 const defaultEffort = "medium"
@@ -88,15 +93,53 @@ func injectFlag(args []string, flag, value string) []string {
 }
 
 // CodexExecArgs 生成 `codex exec` 参数。不附加 --fast，禁用 Fast 档。
+// CodexExecArgsWithMCP is the native Codex CLI launch form with explicitly
+// supplied MCP servers. It is used for direct CLI validation without ACP.
+func CodexExecArgsWithMCP(prompt string, p AgentProfile, servers []MCPServer) []string {
+	p.mcpServers = append([]acp.McpServer(nil), servers...)
+	return CodexExecArgs(prompt, p)
+}
+
 func CodexExecArgs(prompt string, p AgentProfile) []string {
-	args := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral", "--color", "never"}
+	// Agent Chat runs non-interactively; default Codex approval prompts would
+	// otherwise cancel MCP tool calls because no terminal UI can answer them.
+	// The user has explicitly opted into full Agent permissions.
+	args := []string{"exec", "--json", "--skip-git-repo-check", "--ephemeral", "--color", "never", "--dangerously-bypass-approvals-and-sandbox"}
 	if m := strings.TrimSpace(p.Model); m != "" {
 		args = append(args, "--model", m)
 	}
 	if e := strings.TrimSpace(p.Effort); e != "" {
 		args = append(args, "-c", "model_reasoning_effort="+NormalizeEffort(e))
 	}
+	args = append(args, codexMCPConfigArgs(p.mcpServers)...)
 	return append(args, prompt)
+}
+
+// codexMCPConfigArgs converts ACP stdio MCP declarations into Codex's native
+// `mcp_servers` configuration. The in-process ACP adapter receives these at
+// session/new, then each `codex exec` child inherits the same data tools.
+func codexMCPConfigArgs(servers []acp.McpServer) []string {
+	var out []string
+	for _, server := range servers {
+		if server.Stdio == nil || strings.TrimSpace(server.Stdio.Name) == "" || strings.TrimSpace(server.Stdio.Command) == "" {
+			continue
+		}
+		base := "mcp_servers." + server.Stdio.Name
+		out = append(out, "-c", base+".command="+strconv.Quote(server.Stdio.Command))
+		if len(server.Stdio.Args) > 0 {
+			args, err := json.Marshal(server.Stdio.Args)
+			if err == nil {
+				out = append(out, "-c", base+".args="+string(args))
+			}
+		}
+		for _, variable := range server.Stdio.Env {
+			if strings.TrimSpace(variable.Name) == "" {
+				continue
+			}
+			out = append(out, "-c", fmt.Sprintf("%s.env.%s=%s", base, variable.Name, strconv.Quote(variable.Value)))
+		}
+	}
+	return out
 }
 
 func equalArgs(a, b []string) bool {

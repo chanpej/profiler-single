@@ -8,13 +8,14 @@ interface Props {
   onFrames: () => void;
   onAnalysis: () => void;
   onSettings: () => void;
+  onOpenAgentLog?: () => void;
   onToggleAgent?: () => void;
   agentCollapsed?: boolean;
 }
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  onImport, onClear, onFrames, onAnalysis, onSettings, onToggleAgent, agentCollapsed = false,
+  onImport, onClear, onFrames, onAnalysis, onSettings, onOpenAgentLog, onToggleAgent, agentCollapsed = false,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -103,6 +104,15 @@ export function MenuBar({
         onMouseEnter={() => { if (open) setOpen(null); }}
       >
         诊断
+      </button>
+      <button
+        type="button"
+        className="menubar-btn"
+        role="menuitem"
+        onClick={() => run(() => onOpenAgentLog?.())}
+        onMouseEnter={() => { if (open) setOpen(null); }}
+      >
+        Agent Log
       </button>
       <button
         type="button"

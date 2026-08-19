@@ -1,6 +1,10 @@
 package llm
 
-import "strings"
+import (
+	"strings"
+
+	acp "github.com/coder/acp-go-sdk"
+)
 
 // AgentProfile 是一个可切换的 ACP Agent 启动配置。
 type AgentProfile struct {
@@ -11,6 +15,10 @@ type AgentProfile struct {
 	WorkDir string   `json:"workDir"`
 	Model   string   `json:"model,omitempty"`
 	Effort  string   `json:"effort,omitempty"`
+
+	// mcpServers is process-only session state used by the in-process Codex
+	// adapter. It is deliberately not persisted in frontend configuration.
+	mcpServers []acp.McpServer
 }
 
 // DefaultAgents 返回内置预设：Codex 与 Cursor CLI。

@@ -15,24 +15,25 @@ import (
 	"unityperfagent/internal/procutil"
 )
 
-const chatSystemHint = `你是 Unity 移动游戏性能优化专家，目标平台为 Unity 2022（其他版本不需要考虑）。请用中文简洁回答。`
+const chatSystemHint = `你是 Unity 移动游戏性能优化专家，目标平台为 Unity 2022（其他版本不需要考虑）。请用中文简洁回答。你可以使用 UnityPerfAgent MCP 工具查询当前抓取的帧、CPU Hierarchy、统计与规则分析；涉及具体性能结论时应先查询数据，不要臆测。`
 
 // ChatSession 是与 ACP Agent 的长连接多轮会话。
 // 一次 Start 对应一个 Agent 子进程与一条 ACP session，后续 Prompt 复用同一会话。
 type ChatSession struct {
-	cfg       Config
-	cmd       *exec.Cmd
-	cancel    context.CancelFunc
-	stdin     io.Closer
-	conn      *acp.ClientSideConnection
-	sessionID acp.SessionId
-	sink      *updateSink
-	stderr    syncBuf
-	applyCfg  func(Config)
-	models    []AgentModel
-	mu        sync.Mutex
-	closeOnce sync.Once
-	first     bool
+	cfg        Config
+	cmd        *exec.Cmd
+	cancel     context.CancelFunc
+	stdin      io.Closer
+	conn       *acp.ClientSideConnection
+	sessionID  acp.SessionId
+	sink       *updateSink
+	stderr     syncBuf
+	applyCfg   func(Config)
+	models     []AgentModel
+	mcpServers []acp.McpServer
+	mu         sync.Mutex
+	closeOnce  sync.Once
+	first      bool
 }
 
 type syncBuf struct {
@@ -52,9 +53,9 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
-// NewChatSession 创建尚未启动的会话。
-func NewChatSession(cfg Config) *ChatSession {
-	return &ChatSession{cfg: cfg, sink: &updateSink{}, first: true}
+// NewChatSession 创建尚未启动的会话。可选 MCP Server 会在 Start 时暴露给 Agent。
+func NewChatSession(cfg Config, mcpServers ...MCPServer) *ChatSession {
+	return &ChatSession{cfg: cfg, mcpServers: append([]acp.McpServer(nil), mcpServers...), sink: &updateSink{}, first: true}
 }
 
 // Start 拉起 ACP Agent 子进程并完成 initialize / authenticate / session/new。
@@ -141,7 +142,7 @@ func (s *ChatSession) stderrHint() string {
 
 // startOver 在给定传输通道上完成 ACP 握手并创建 session。
 func (s *ChatSession) startOver(ctx context.Context, agentStdin io.Writer, agentStdout io.Reader) error {
-	conn, sess, err := acpHandshake(ctx, s.sink, agentStdin, agentStdout, s.cfg.cwd())
+	conn, sess, err := acpHandshake(ctx, s.sink, agentStdin, agentStdout, s.cfg.cwd(), s.mcpServers)
 	if err != nil {
 		return err
 	}
@@ -200,7 +201,9 @@ func (s *ChatSession) Prompt(ctx context.Context, text string, onChunk func(stri
 		return "", fmt.Errorf("llm: chat session not started")
 	}
 	if first {
-		text = chatSystemHint + "\n\n" + text
+		// ACP exposes no system-role content to codex exec. The service already
+		// turns the user's first message into an executable MCP task, so avoid
+		// prepending a second instruction block that Codex may only acknowledge.
 		s.mu.Lock()
 		s.first = false
 		s.mu.Unlock()

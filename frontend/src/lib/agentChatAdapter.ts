@@ -10,15 +10,24 @@ export function bindAgentStream(
   onChunk: (handler: (text: string) => void) => () => void,
 ) {
   return (message: string, observer: StreamObserver) => {
-    let gotChunk = false;
+    let streamed = '';
     const off = onChunk((text) => {
-      gotChunk = true;
+      streamed += text;
       observer.next(text);
     });
     Promise.resolve(send(message))
       .then((full) => {
         off();
-        if (full && !gotChunk) observer.next(full);
+        // Wails events and the RPC result use separate queues. A preliminary
+        // chunk may arrive before the RPC completes while later chunks are
+        // still queued, so append the part of the authoritative final result
+        // that has not reached the UI yet.
+        if (full.startsWith(streamed)) {
+          const remaining = full.slice(streamed.length);
+          if (remaining) observer.next(remaining);
+        } else if (full && full !== streamed) {
+          observer.next(full);
+        }
         observer.complete();
       })
       .catch((e) => {

@@ -27,6 +27,21 @@ func TestExtractCodexTexts(t *testing.T) {
 	}
 }
 
+func TestExtractCodexTextsIncludesReasoningAndMCPProgress(t *testing.T) {
+	reasoning := extractCodexTexts([]byte(`{"type":"item.completed","item":{"type":"reasoning","text":"先确认会话摘要。"}}`))
+	if got := strings.Join(reasoning, ""); !strings.Contains(got, "【思考摘要】先确认会话摘要。") {
+		t.Fatalf("reasoning = %q", got)
+	}
+	started := extractCodexTexts([]byte(`{"type":"item.started","item":{"type":"mcp_tool_call","server":"unity-perf-data","tool":"performance_session_summary"}}`))
+	if got := strings.Join(started, ""); !strings.Contains(got, "【MCP 工具】正在调用 unity-perf-data.performance_session_summary。") {
+		t.Fatalf("started = %q", got)
+	}
+	completed := extractCodexTexts([]byte(`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"unity-perf-data","tool":"performance_session_summary"}}`))
+	if got := strings.Join(completed, ""); !strings.Contains(got, "【MCP 工具】unity-perf-data.performance_session_summary 已返回结果。") {
+		t.Fatalf("completed = %q", got)
+	}
+}
+
 func TestCodexAdapterHandshakeAndPrompt(t *testing.T) {
 	run := func(_ context.Context, _, prompt string, _ AgentProfile, emit func(string)) error {
 		if !strings.Contains(prompt, "诊断") {

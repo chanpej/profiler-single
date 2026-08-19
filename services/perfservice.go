@@ -112,6 +112,8 @@ type PerfService struct {
 	callStacks bool
 	lastErr    string
 	chat       *llm.ChatSession
+	mcp        *agentMCPBridge
+	agentLogs  []AgentLogEntry
 
 	// wantLive 表示用户点了连接且尚未点断开。对端 EOF 后仍为 true，会自动重连。
 	wantLive        bool
@@ -145,6 +147,7 @@ func NewPerfService() *PerfService {
 		tickReq:    make(chan struct{}, 1),
 		stopUI:     make(chan struct{}),
 	}
+	p.mcp = newAgentMCPBridge(p)
 	p.client.SetRawHandler(p.onRaw)
 	go p.uiLoop()
 	return p
@@ -163,6 +166,7 @@ func (p *PerfService) ServiceStartup(ctx context.Context, options application.Se
 func (p *PerfService) ServiceShutdown() error {
 	p.Disconnect()
 	p.AgentChatClose()
+	p.mcp.close()
 	close(p.stopUI)
 	p.mu.Lock()
 	f := p.logFile
@@ -619,16 +623,25 @@ func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string
 	if message == "" {
 		return "", errors.New("消息为空")
 	}
+	p.addAgentLog("Agent", "User → Agent", "prompt", message)
+	agentPrompt := "直接执行以下性能分析任务，不要回复确认或计划。先调用 MCP 工具 performance_session_summary；如需定位再调用帧或 CPU Hierarchy 工具。取得数据后在本回合给出结论、数据证据和按优先级排序的 Unity 2022 优化建议。\n\n用户任务：\n" + message
 	sess, err := p.ensureChat()
 	if err != nil {
+		p.addAgentLog("Agent", "System → User", "start", err.Error())
 		return "", err
 	}
 	p.mu.Lock()
 	emit := p.emit
 	p.mu.Unlock()
-	return sess.Prompt(ctx, message, func(chunk string) {
+	result, err := sess.Prompt(ctx, agentPrompt, func(chunk string) {
 		emit(AgentChunkEventName, AgentChunkEvent{Text: chunk})
 	})
+	if err != nil {
+		p.addAgentLog("Agent", "Agent → User", "error", err.Error())
+		return "", err
+	}
+	p.addAgentLog("Agent", "Agent → User", "response", result)
+	return result, nil
 }
 
 // AgentChatClose 结束当前 ACP 聊天会话。
@@ -652,7 +665,11 @@ func (p *PerfService) ensureChat() (*llm.ChatSession, error) {
 	cfg := p.llmCfg
 	p.mu.Unlock()
 
-	sess := llm.NewChatSession(cfg)
+	mcpServer, err := p.mcp.config()
+	if err != nil {
+		return nil, err
+	}
+	sess := llm.NewChatSession(cfg, mcpServer)
 	if err := sess.Start(context.Background()); err != nil {
 		return nil, err
 	}
@@ -681,8 +698,12 @@ func (p *PerfService) Diagnose(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	mcpServer, err := p.mcp.config()
+	if err != nil {
+		return "", err
+	}
 	p.mu.Lock()
-	client := llm.NewClient(p.llmCfg)
+	client := llm.NewClient(p.llmCfg, mcpServer)
 	p.mu.Unlock()
 	return client.Diagnose(ctx, string(data))
 }

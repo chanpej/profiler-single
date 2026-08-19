@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -71,6 +72,47 @@ func TestDiagnoseWithoutLLMConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMCPToolsReadCurrentSession(t *testing.T) {
+	svc := newTestService()
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 7, FPS: 55, CPUTimeMs: 18}, []protocol.SampleNode{{Name: "Main Thread", TotalMs: 18}}))
+
+	frames, err := svc.mcp.execute("performance_frames", json.RawMessage(`{"offset":0,"limit":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFrames, ok := frames.([]protocol.FrameData)
+	if !ok || len(gotFrames) != 1 || gotFrames[0].FrameIndex != 7 {
+		t.Fatalf("frames = %#v", frames)
+	}
+
+	frame, err := svc.mcp.execute("performance_frame", json.RawMessage(`{"index":0,"includeHierarchy":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFrame, ok := frame.(map[string]any)
+	if !ok || len(gotFrame["hierarchy"].([]protocol.SampleNode)) != 1 {
+		t.Fatalf("frame = %#v", frame)
+	}
+	if _, err := svc.mcp.execute("performance_frames", json.RawMessage(`{"offset":0,"limit":201}`)); err == nil {
+		t.Fatal("expected oversized MCP frame query to fail")
+	}
+}
+
+func TestAgentLogsKeepRecentEntries(t *testing.T) {
+	svc := newTestService()
+	for i := 0; i < agentLogCapacity+1; i++ {
+		svc.addAgentLog("Agent", "Agent → User", "response", fmt.Sprintf("%d", i))
+	}
+	logs := svc.AgentLogs()
+	if len(logs) != agentLogCapacity || logs[0].Payload != "1" {
+		t.Fatalf("logs = %d, first = %+v", len(logs), logs[0])
+	}
+	svc.ClearAgentLogs()
+	if len(svc.AgentLogs()) != 0 {
+		t.Fatal("logs should be empty after clearing")
 	}
 }
 

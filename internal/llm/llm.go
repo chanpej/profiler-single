@@ -35,11 +35,32 @@ var ErrNotConfigured = errors.New("llm: not configured (missing acp agent comman
 
 // Client 通过 ACP 与外部 LLM Agent 通信。
 type Client struct {
-	cfg Config
+	cfg        Config
+	mcpServers []acp.McpServer
 }
 
-// NewClient 创建客户端。
-func NewClient(cfg Config) *Client { return &Client{cfg: cfg} }
+// MCPServer is an ACP MCP server declaration passed to a newly created Agent session.
+type MCPServer = acp.McpServer
+
+// NewStdioMCP describes a stdio MCP server for ACP Agents. ACP starts the
+// command when it creates the session, keeping the server scoped to the Agent.
+func NewStdioMCP(command string, args []string, env map[string]string) MCPServer {
+	variables := make([]acp.EnvVariable, 0, len(env))
+	for name, value := range env {
+		variables = append(variables, acp.EnvVariable{Name: name, Value: value})
+	}
+	return acp.McpServer{Stdio: &acp.McpServerStdio{
+		Name:    "unity-perf-data",
+		Command: command,
+		Args:    append([]string(nil), args...),
+		Env:     variables,
+	}}
+}
+
+// NewClient 创建客户端。可选 MCP Server 会在 Agent session/new 时暴露。
+func NewClient(cfg Config, mcpServers ...MCPServer) *Client {
+	return &Client{cfg: cfg, mcpServers: append([]acp.McpServer(nil), mcpServers...)}
+}
 
 // Configured 返回当前选中的 Agent 是否可启动。
 func (c *Client) Configured() bool {
@@ -50,7 +71,7 @@ const promptTemplate = `你是 Unity 移动游戏性能优化专家，目标平�
 下面是一份来自真机采集的性能分析报告（JSON），请：
 1. 用中文给出简明的诊断结论；
 2. 按优先级列出最多 5 条可执行的优化建议，结合 Unity 2022 的特性（如 URP、Burst、Incremental GC）；
-3. 若数据不足请直接说明。
+3. 若数据不足请直接说明；可使用 UnityPerfAgent MCP 工具查询帧、CPU Hierarchy 和统计来核实结论。
 
 性能分析报告：
 %s`
@@ -62,7 +83,7 @@ func (c *Client) Diagnose(ctx context.Context, reportJSON string) (string, error
 		return "", ErrNotConfigured
 	}
 	if useInProcessCodex(launch) {
-		sess := NewChatSession(c.cfg)
+		sess := NewChatSession(c.cfg, c.mcpServers...)
 		if err := sess.Start(ctx); err != nil {
 			return "", err
 		}
@@ -109,7 +130,7 @@ func (c *Client) diagnoseOver(ctx context.Context, agentStdin io.Writer, agentSt
 			cwd = wd
 		}
 	}
-	conn, sess, err := acpHandshake(ctx, sink, agentStdin, agentStdout, cwd)
+	conn, sess, err := acpHandshake(ctx, sink, agentStdin, agentStdout, cwd, c.mcpServers)
 	if err != nil {
 		return "", err
 	}
@@ -132,15 +153,17 @@ func (c *Client) diagnoseOver(ctx context.Context, agentStdin io.Writer, agentSt
 // updateSink 实现 acp.Client 接口，收集 Agent 的流式回复文本。
 // 性能诊断是只读任务，文件系统/终端/权限请求一律拒绝。
 type updateSink struct {
-	mu      sync.Mutex
-	buf     strings.Builder
-	onChunk func(string)
+	mu         sync.Mutex
+	buf        strings.Builder
+	onChunk    func(string)
+	toolTitles map[acp.ToolCallId]string
 }
 
 func (s *updateSink) reset(onChunk func(string)) {
 	s.mu.Lock()
 	s.buf.Reset()
 	s.onChunk = onChunk
+	s.toolTitles = make(map[acp.ToolCallId]string)
 	s.mu.Unlock()
 }
 
@@ -150,24 +173,78 @@ func (s *updateSink) text() string {
 	return strings.TrimSpace(s.buf.String())
 }
 
-// SessionUpdate 收集 agent_message_chunk 中的文本内容。
+// SessionUpdate 将 Agent 的最终文本、思考摘要与工具状态都转发到聊天 UI。
+// 原始工具输入/输出可能包含大量性能数据，只保留标题与执行状态。
 func (s *updateSink) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
-	if n.Update.AgentMessageChunk != nil {
-		if t := n.Update.AgentMessageChunk.Content.Text; t != nil {
-			s.mu.Lock()
-			s.buf.WriteString(t.Text)
-			fn := s.onChunk
-			s.mu.Unlock()
-			if fn != nil {
-				fn(t.Text)
-			}
+	if message := n.Update.AgentMessageChunk; message != nil && message.Content.Text != nil {
+		s.appendText(message.Content.Text.Text)
+	}
+	if thought := n.Update.AgentThoughtChunk; thought != nil && thought.Content.Text != nil {
+		s.appendText("\n\n【思考摘要】" + thought.Content.Text.Text)
+	}
+	if call := n.Update.ToolCall; call != nil {
+		title := toolTitle(call.Title, call.ToolCallId)
+		s.mu.Lock()
+		if s.toolTitles == nil {
+			s.toolTitles = make(map[acp.ToolCallId]string)
 		}
+		s.toolTitles[call.ToolCallId] = title
+		s.mu.Unlock()
+		s.appendText("\n\n【工具】正在调用 " + title + "。")
+	}
+	if update := n.Update.ToolCallUpdate; update != nil {
+		s.mu.Lock()
+		title := s.toolTitles[update.ToolCallId]
+		if update.Title != nil && strings.TrimSpace(*update.Title) != "" {
+			title = strings.TrimSpace(*update.Title)
+			s.toolTitles[update.ToolCallId] = title
+		}
+		s.mu.Unlock()
+		if title == "" {
+			title = toolTitle("", update.ToolCallId)
+		}
+		status := "状态已更新"
+		if update.Status != nil {
+			status = string(*update.Status)
+		}
+		s.appendText("\n\n【工具】" + title + "：" + status + "。")
 	}
 	return nil
 }
 
-// RequestPermission 拒绝一切工具授权请求（诊断任务无需 Agent 改动任何东西）。
+func (s *updateSink) appendText(text string) {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	s.buf.WriteString(text)
+	fn := s.onChunk
+	s.mu.Unlock()
+	if fn != nil {
+		fn(text)
+	}
+}
+
+func toolTitle(title string, id acp.ToolCallId) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return title
+	}
+	return "工具 " + string(id)
+}
+
+// RequestPermission automatically grants the most durable allow option. Agent
+// Chat is configured for full permissions, including non-interactive ACP runs.
 func (s *updateSink) RequestPermission(ctx context.Context, p acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
+	for _, option := range p.Options {
+		if option.Kind == acp.PermissionOptionKindAllowAlways {
+			return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
+		}
+	}
+	for _, option := range p.Options {
+		if option.Kind == acp.PermissionOptionKindAllowOnce {
+			return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(option.OptionId)}, nil
+		}
+	}
 	return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}, nil
 }
 

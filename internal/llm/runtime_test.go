@@ -3,6 +3,8 @@ package llm
 import (
 	"strings"
 	"testing"
+
+	acp "github.com/coder/acp-go-sdk"
 )
 
 func TestCursorModelSpecDisablesFast(t *testing.T) {
@@ -59,8 +61,24 @@ func TestCodexExecArgsNeverUsesFast(t *testing.T) {
 	if strings.Contains(joined, "--fast") {
 		t.Fatalf("codex must not enable fast: %v", got)
 	}
-	if joined != "exec --json --skip-git-repo-check --ephemeral --color never --model gpt-5.3-codex -c model_reasoning_effort=xhigh hello" {
+	if !strings.Contains(joined, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("Codex must receive the user-approved full permission flag: %q", joined)
+	}
+	if joined != "exec --json --skip-git-repo-check --ephemeral --color never --dangerously-bypass-approvals-and-sandbox --model gpt-5.3-codex -c model_reasoning_effort=xhigh hello" {
 		t.Fatalf("got %q", joined)
+	}
+}
+
+func TestCodexExecArgsIncludesSessionMCP(t *testing.T) {
+	p := AgentProfile{mcpServers: []acp.McpServer{{Stdio: &acp.McpServerStdio{
+		Name: "unity-perf-data", Command: "UnityPerfAgent.exe", Args: []string{"mcp"},
+		Env: []acp.EnvVariable{{Name: "UNITY_PERF_MCP_TOKEN", Value: "secret"}},
+	}}}}
+	joined := strings.Join(CodexExecArgs("analyze", p), " ")
+	for _, expected := range []string{"mcp_servers.unity-perf-data.command=\"UnityPerfAgent.exe\"", "mcp_servers.unity-perf-data.args=[\"mcp\"]", "UNITY_PERF_MCP_TOKEN=\"secret\""} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing %q in %q", expected, joined)
+		}
 	}
 }
 

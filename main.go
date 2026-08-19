@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"unityperfagent/internal/mcp"
 	"unityperfagent/services"
 )
 
@@ -20,6 +23,15 @@ func init() {
 }
 
 func main() {
+	// The desktop executable is also the stdio MCP transport launched by ACP
+	// Agents. It does not initialise Wails in this mode.
+	if len(os.Args) == 2 && os.Args[1] == "mcp" {
+		if err := mcp.Serve(context.Background(), os.Stdin, os.Stdout, os.Getenv("UNITY_PERF_MCP_ENDPOINT"), os.Getenv("UNITY_PERF_MCP_TOKEN")); err != nil {
+			log.Print(err)
+		}
+		return
+	}
+
 	app := application.New(application.Options{
 		Name:        "UnityPerfAgent",
 		Description: "独立于 Unity Editor 的真机性能分析与 LLM 自动诊断工具（Unity 2022）",

@@ -125,6 +125,28 @@ func TestDiagnoseOverInProcAgent(t *testing.T) {
 	}
 }
 
+func TestUpdateSinkForwardsThoughtAndToolCall(t *testing.T) {
+	sink := &updateSink{}
+	var chunks []string
+	sink.reset(func(text string) { chunks = append(chunks, text) })
+	if err := sink.SessionUpdate(t.Context(), acp.SessionNotification{
+		Update: acp.UpdateAgentThoughtText("先查询当前会话。"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.SessionUpdate(t.Context(), acp.SessionNotification{
+		Update: acp.StartToolCall(acp.ToolCallId("perf-summary"), "performance_session_summary"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(chunks, "")
+	for _, expected := range []string{"【思考摘要】先查询当前会话。", "【工具】正在调用 performance_session_summary。"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("missing %q in %q", expected, got)
+		}
+	}
+}
+
 func TestDiagnoseOverEmptyReply(t *testing.T) {
 	agent := &fakeAgent{replyParts: nil}
 	w, r := startInProcAgent(t, agent)
@@ -199,8 +221,8 @@ func TestChatSessionPromptOverInProcAgent(t *testing.T) {
 	if strings.Join(chunks, "") != out {
 		t.Fatalf("chunks = %q, out = %q", chunks, out)
 	}
-	if !strings.Contains(agent.lastPrompt, "Unity 2022") {
-		t.Fatalf("first prompt should include system hint: %q", agent.lastPrompt)
+	if !strings.Contains(agent.lastPrompt, "卡顿原因？") {
+		t.Fatalf("first prompt should preserve the executable task: %q", agent.lastPrompt)
 	}
 
 	agent.replyParts = []string{"第二轮。"}

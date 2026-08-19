@@ -44,12 +44,26 @@ export function AgentChatSend(message: string): $CancellablePromise<string> {
     return $Call.ByID(1667067564, message);
 }
 
+/**
+ * AgentLogs returns the recent Agent and MCP protocol interactions.
+ */
+export function AgentLogs(): $CancellablePromise<$models.AgentLogEntry[] | null> {
+    return $Call.ByID(3384874531);
+}
+
 export function Analyze(): $CancellablePromise<analyzer$0.Report> {
     return $Call.ByID(1468977693);
 }
 
 export function Clear(): $CancellablePromise<void> {
     return $Call.ByID(2559286172);
+}
+
+/**
+ * ClearAgentLogs removes the interaction history displayed in the Agent Log window.
+ */
+export function ClearAgentLogs(): $CancellablePromise<void> {
+    return $Call.ByID(2704015638);
 }
 
 /**
@@ -138,6 +152,14 @@ export function Latest(n: number): $CancellablePromise<protocol$0.FrameData[] | 
  */
 export function ListAgentModels(cfg: llm$0.Config): $CancellablePromise<llm$0.AgentModel[] | null> {
     return $Call.ByID(3004357042, cfg);
+}
+
+/**
+ * OpenAgentLog shows the interaction history in a separate native WebView
+ * window, so inspecting full MCP payloads never obscures the profiler view.
+ */
+export function OpenAgentLog(): $CancellablePromise<void> {
+    return $Call.ByID(2955930262);
 }
 
 /**
