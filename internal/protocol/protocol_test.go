@@ -41,6 +41,16 @@ func sampleFrame() FrameData {
 		ProfilerUsedMB:     12,
 		ProfilerReservedMB: 20,
 		SystemUsedMB:       150.5,
+		CommittedMemMB:     768,
+		TextureMemMB:       30.2,
+		MeshMemMB:          3.4,
+		MaterialCount:      1003,
+		ObjectCount:        4310,
+		TextureCount:       594,
+		MeshCount:          166,
+		GameObjectCount:    4310,
+		SceneObjectCount:   15974,
+		MemoryCounterMask:  MemoryCounterCommitted | MemoryCounterTexture | MemoryCounterObjectCount,
 		ShadowCasters:      18,
 		PlayingSources:     9,
 		AudioVoices:        14,
@@ -67,14 +77,31 @@ func TestFrameEncodeDecodeRoundTrip(t *testing.T) {
 }
 
 func TestFramePayloadSize(t *testing.T) {
-	if FramePayloadSize != 164 {
-		t.Fatalf("FramePayloadSize = %d, want 164", FramePayloadSize)
+	if FramePayloadSize != 204 {
+		t.Fatalf("FramePayloadSize = %d, want 204", FramePayloadSize)
+	}
+	if ExtendedFramePayloadSize != 164 {
+		t.Fatalf("ExtendedFramePayloadSize = %d, want 164", ExtendedFramePayloadSize)
 	}
 	if LegacyFramePayloadSize != 68 {
 		t.Fatalf("LegacyFramePayloadSize = %d, want 68", LegacyFramePayloadSize)
 	}
 	if len(EncodeFrame(&FrameData{})) != FramePayloadSize {
 		t.Fatal("EncodeFrame 长度应等于 FramePayloadSize")
+	}
+}
+
+func TestDecodeExtendedFrameKeepsV2Compatibility(t *testing.T) {
+	full := sampleFrame()
+	got, err := DecodeFrame(EncodeFrame(&full)[:ExtendedFramePayloadSize])
+	if err != nil {
+		t.Fatalf("DecodeFrame v2: %v", err)
+	}
+	if got.UsedMemMB != full.UsedMemMB || got.GCUsedMB != full.GCUsedMB || got.DrawCalls != full.DrawCalls {
+		t.Fatalf("v2 fields changed: %+v", got)
+	}
+	if got.CommittedMemMB != 0 || got.TextureMemMB != 0 || got.MemoryCounterMask != 0 {
+		t.Fatalf("v2 must not invent v3 memory fields: %+v", got)
 	}
 }
 

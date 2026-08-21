@@ -47,6 +47,24 @@ export interface FrameData {
     "systemUsedMB": number;
 
     /**
+     * Unity Editor Memory 图表与 Simple 视图的补充计数器。
+     */
+    "committedMemMB": number;
+    "textureMemMB": number;
+    "meshMemMB": number;
+    "materialCount": number;
+    "objectCount": number;
+    "textureCount": number;
+    "meshCount": number;
+    "gameObjectCount": number;
+    "sceneObjectCount": number;
+
+    /**
+     * MemoryCounterMask 仅用于展示可用性，区分真实 0 与采集源未提供。
+     */
+    "memoryCounterMask": number;
+
+    /**
      * ---- Rendering / Audio / Physics / UI 模块计数器 ----
      */
     "shadowCasters": number;

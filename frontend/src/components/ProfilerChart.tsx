@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { FrameData } from '../types';
-import { chartMax, extractModuleSeries, type ModuleDef } from '../lib/profiler';
+import { chartMax, extractModuleSeries, memoryMetricAvailable, type ModuleDef } from '../lib/profiler';
 import { formatProfilerValue } from '../lib/format';
 
 interface Props {
@@ -25,19 +25,38 @@ function indexFromClick(clientX: number, wrap: HTMLElement, count: number): numb
   return Math.min(count - 1, Math.floor((x / rect.width) * count));
 }
 
+type MemoryMetricId = Parameters<typeof memoryMetricAvailable>[1];
+
+function memoryMetricForSeries(id: string): MemoryMetricId | null {
+  const metrics: Record<string, MemoryMetricId> = {
+    total: 'totalUsed',
+    texture: 'texture',
+    mesh: 'mesh',
+    materialCount: 'materialCount',
+    objectCount: 'objectCount',
+    gc: 'gcUsed',
+  };
+  return metrics[id] ?? null;
+}
+
 /**
  * Unity Profiler 风格模块图：左侧图例（含当前帧数值）+ 右侧 Canvas 堆叠/叠加柱。
  * 点击或拖拽图表选帧，点击整行激活该模块的详情面板。
  */
 export function ProfilerChart({
-  module, frames, selectedIndex, active, height = 88, onSelectFrame, onActivate, onWheel,
+  module, frames, selectedIndex, active, height, onSelectFrame, onActivate, onWheel,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef(false);
   const series = useMemo(() => extractModuleSeries(module, frames), [module, frames]);
   const maxY = useMemo(() => chartMax(module, series), [module, series]);
-  const headline = frames[selectedIndex] ? module.headline(frames[selectedIndex]) : null;
+  const selectedFrame = frames[selectedIndex];
+  const isMemory = module.id === 'memory';
+  const chartHeight = height ?? (isMemory ? 170 : 88);
+  const headline = selectedFrame && (!isMemory || memoryMetricAvailable(selectedFrame, 'totalUsed'))
+    ? module.headline(selectedFrame)
+    : null;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -47,7 +66,7 @@ export function ProfilerChart({
     const draw = () => {
       const dpr = window.devicePixelRatio || 1;
       const w = wrap.clientWidth;
-      const h = height;
+      const h = chartHeight;
       if (w === 0) return;
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
@@ -79,7 +98,31 @@ export function ProfilerChart({
       if (frames.length === 0) return;
 
       const barW = w / frames.length;
-      if (module.stacked) {
+      if (isMemory) {
+        // Memory 模块与 CPU 的堆叠区不同：Editor 将异单位的计数器画成独立折线。
+        for (const s of series) {
+          const metric = memoryMetricForSeries(s.id);
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          let drawing = false;
+          for (let i = 0; i < frames.length; i++) {
+            if (metric && !memoryMetricAvailable(frames[i], metric)) {
+              drawing = false;
+              continue;
+            }
+            const x = frames.length === 1 ? 0 : (i / (frames.length - 1)) * w;
+            const y = padTop + plotH - ((s.values[i] || 0) / maxY) * plotH;
+            if (!drawing) {
+              ctx.moveTo(x, y);
+              drawing = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
+          }
+          ctx.stroke();
+        }
+      } else if (module.stacked) {
         for (let i = 0; i < frames.length; i++) {
           let acc = 0;
           for (const s of series) {
@@ -119,7 +162,7 @@ export function ProfilerChart({
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [frames, height, maxY, module, selectedIndex, series]);
+  }, [chartHeight, frames, maxY, module, selectedIndex, series]);
 
   const pick = (clientX: number) => {
     if (!wrapRef.current || frames.length === 0) return;
@@ -128,9 +171,10 @@ export function ProfilerChart({
 
   return (
     <div
-      className={`profiler-chart ${active ? 'is-active' : ''}`}
+      className={`profiler-chart ${isMemory ? 'profiler-chart--memory' : ''} ${active ? 'is-active' : ''}`}
       data-testid={`profiler-chart-${module.id}`}
       data-active={active ? 'true' : 'false'}
+      data-memory={isMemory ? 'true' : undefined}
       onClick={onActivate}
     >
       <div className="profiler-chart-meta">
@@ -141,12 +185,14 @@ export function ProfilerChart({
         <ul className="profiler-legend">
           {series.map((s) => {
             const value = s.values[selectedIndex];
+            const metric = memoryMetricForSeries(s.id);
+            const available = !isMemory || !selectedFrame || !metric || memoryMetricAvailable(selectedFrame, metric);
             return (
-              <li key={s.id}>
+              <li key={s.id} className={available ? '' : 'is-unavailable'}>
                 <span className="swatch" style={{ background: s.color }} />
                 <span className="profiler-legend-label">{s.label}</span>
                 <span className="mono profiler-legend-val">
-                  {value == null ? '' : formatProfilerValue(value, s.unit)}
+                  {available && value != null ? formatProfilerValue(value, s.unit) : '—'}
                 </span>
               </li>
             );

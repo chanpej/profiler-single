@@ -33,6 +33,18 @@ export interface FrameData {
   profilerUsedMB: number;
   profilerReservedMB: number;
   systemUsedMB: number;
+  /** Unity Editor Memory 模块的 committed 与资源统计。 */
+  committedMemMB: number;
+  textureMemMB: number;
+  meshMemMB: number;
+  materialCount: number;
+  objectCount: number;
+  textureCount: number;
+  meshCount: number;
+  gameObjectCount: number;
+  sceneObjectCount: number;
+  /** 位掩码：当前帧由采集源实际提供的 Memory 计数器；旧采集不带该字段。 */
+  memoryCounterMask?: number;
   shadowCasters: number;
   playingSources: number;
   audioVoices: number;

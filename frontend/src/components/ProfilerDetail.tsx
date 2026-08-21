@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { ClipboardCopy } from 'lucide-react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
-import { memorySimpleRows, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
+import { memoryEditorSummary, memoryMetricAvailable, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
 import { formatCount, formatFps, formatGCAlloc, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
 import { categoryColor, flattenVisible, mergeExpanded, mergeSampleNodes } from '../lib/hierarchy';
 import { copyText } from '../lib/agentChatUi';
@@ -360,30 +360,96 @@ function HierarchyTable({ rows }: { rows: ReturnType<typeof moduleBreakdown> }) 
 }
 
 function MemorySimple({ frame }: { frame: FrameData }) {
+  const summary = memoryEditorSummary(frame);
+  const value = (available: boolean, amount: number) => (available ? formatMB1(amount) : '—');
+  const objectRows = [
+    { label: 'Textures', count: frame.textureCount, size: frame.textureMemMB, available: memoryMetricAvailable(frame, 'textureCount') && memoryMetricAvailable(frame, 'texture') },
+    { label: 'Meshes', count: frame.meshCount, size: frame.meshMemMB, available: memoryMetricAvailable(frame, 'meshCount') && memoryMetricAvailable(frame, 'mesh') },
+    { label: 'Materials', count: frame.materialCount, available: memoryMetricAvailable(frame, 'materialCount') },
+    { label: 'Game Objects', count: frame.gameObjectCount, available: memoryMetricAvailable(frame, 'gameObjectCount') },
+    { label: 'Scene Objects', count: frame.sceneObjectCount, available: memoryMetricAvailable(frame, 'sceneObjectCount') },
+  ];
+  const trackedSegments = [
+    { label: 'Tracked Memory', value: summary.trackedReserved, color: '#E8A838', available: summary.trackedAvailable },
+    { label: 'Untracked Memory', value: summary.untracked, color: '#65717E', available: summary.untrackedAvailable, untracked: true },
+  ];
+  const breakdownSegments = [
+    ...summary.breakdown.filter((row) => row.available).map((row) => ({ label: row.label, value: row.used, color: row.color })),
+    ...(summary.untrackedAvailable ? [{ label: 'Untracked Memory', value: summary.untracked, color: '#65717E', untracked: true }] : []),
+  ];
+
   return (
-    <table className="profiler-table" data-testid="memory-simple">
-      <thead>
-        <tr>
-          <th>Category</th>
-          <th>Used</th>
-          <th>Reserved</th>
-        </tr>
-      </thead>
-      <tbody>
-        {memorySimpleRows(frame).map((r) => (
-          <tr key={r.label}>
-            <td>{r.label}</td>
-            <td className="mono">{formatMB1(r.used)}</td>
-            <td className="mono">{r.reserved > 0 ? formatMB1(r.reserved) : '—'}</td>
-          </tr>
-        ))}
-        <tr>
-          <td>GC Alloc</td>
-          <td className="mono">{formatGCAlloc(frame.gcAllocKB)}</td>
-          <td className="mono">—</td>
-        </tr>
-      </tbody>
-    </table>
+    <div className="memory-editor-simple" data-testid="memory-simple">
+      <section className="memory-editor-section" aria-labelledby="committed-memory-title">
+        <div className="memory-editor-heading">
+          <h3 id="committed-memory-title">Total Committed Memory</h3>
+          <span className="mono">{value(summary.committedAvailable, summary.committed)}</span>
+        </div>
+        <MemoryBar total={summary.committed} segments={trackedSegments} />
+        <div className="memory-editor-rows">
+          <MemoryValueRow label="Tracked Memory" available={summary.trackedAvailable} used={summary.trackedUsed} reserved={summary.trackedReserved} />
+          <MemoryValueRow label="Untracked Memory" available={summary.untrackedAvailable} used={summary.untracked} />
+        </div>
+      </section>
+      <section className="memory-editor-section" aria-labelledby="memory-breakdown-title">
+        <div className="memory-editor-heading">
+          <h3 id="memory-breakdown-title">Total Memory Breakdown</h3>
+          <span className="mono">{value(summary.committedAvailable, summary.committed)}</span>
+        </div>
+        <MemoryBar total={summary.committed} segments={breakdownSegments} />
+        <div className="memory-editor-rows">
+          {summary.breakdown.map((row) => (
+            <MemoryValueRow key={row.id} label={row.label} color={row.color} available={row.available} used={row.used} reserved={row.reserved} />
+          ))}
+          <MemoryValueRow label="Untracked Memory" color="#65717E" available={summary.untrackedAvailable} used={summary.untracked} />
+        </div>
+      </section>
+      <section className="memory-editor-section" aria-labelledby="object-statistics-title">
+        <div className="memory-editor-heading"><h3 id="object-statistics-title">Object Statistics</h3></div>
+        <table className="profiler-table memory-object-table">
+          <thead><tr><th>Category</th><th>Count</th><th>Size</th></tr></thead>
+          <tbody>
+            {objectRows.map((row) => (
+              <tr key={row.label} className={row.available ? '' : 'is-unavailable'}>
+                <td>{row.label}</td>
+                <td className="mono">{row.available ? formatCount(row.count) : '—'}</td>
+                <td className="mono">{row.available && row.size != null ? formatMB1(row.size) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+      {!summary.committedAvailable && (
+        <p className="dim memory-unavailable">
+          当前帧未提供 App Committed Memory。Unity Editor .data 兼容导入仍在补齐该统计块；实时采集或 .upac 原始存档可提供完整 Memory 数据。
+        </p>
+      )}
+    </div>
+  );
+}
+
+function MemoryBar({ total, segments }: { total: number; segments: { label: string; value: number; color: string; available?: boolean; untracked?: boolean }[] }) {
+  const visible = segments.filter((segment) => segment.available !== false && segment.value > 0);
+  return (
+    <div className="memory-bar" aria-label="内存占比条">
+      {visible.length === 0 ? <span className="memory-bar-empty">—</span> : visible.map((segment) => (
+        <span
+          key={segment.label}
+          className={segment.untracked ? 'memory-bar-segment is-untracked' : 'memory-bar-segment'}
+          title={`${segment.label}: ${formatMB1(segment.value)}`}
+          style={{ width: `${total > 0 ? (segment.value / total) * 100 : 0}%`, backgroundColor: segment.color }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MemoryValueRow({ label, color, available, used, reserved }: { label: string; color?: string; available: boolean; used: number; reserved?: number }) {
+  return (
+    <div className={`memory-value-row ${available ? '' : 'is-unavailable'}`}>
+      <span>{color && <span className="swatch" style={{ background: color }} />}{label}</span>
+      <span className="mono">{available ? (reserved == null ? formatMB1(used) : `${formatMB1(used)} / ${formatMB1(reserved)}`) : '—'}</span>
+    </div>
   );
 }
 

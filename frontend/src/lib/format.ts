@@ -66,9 +66,10 @@ export function formatPct(v: number): string {
 }
 
 /** 按单位格式化 Profiler 数值。 */
-export function formatProfilerValue(v: number, unit: 'ms' | 'mb' | 'count'): string {
+export function formatProfilerValue(v: number, unit: 'ms' | 'mb' | 'kb' | 'count'): string {
   if (unit === 'ms') return formatMs(v);
   if (unit === 'mb') return formatMB1(v);
+  if (unit === 'kb') return formatGCAlloc(v);
   return formatCount(v);
 }
 

@@ -464,6 +464,11 @@ func TestToFrameDataMapsCounters(t *testing.T) {
 			ctrGPUFrame:       11_000_000,
 			ctrDrawCalls:      321,
 			ctrTotalUsed:      512 * bytesPerMB,
+			ctrCommitted:      768 * bytesPerMB,
+			ctrTextureMemory:  30 * bytesPerMB,
+			ctrMeshMemory:     3 * bytesPerMB,
+			ctrMaterialCount:  1003,
+			ctrObjectCount:    4310,
 			ctrGCAllocInFrame: 4 * bytesPerKB,
 		},
 	}
@@ -486,6 +491,15 @@ func TestToFrameDataMapsCounters(t *testing.T) {
 	}
 	if math.Abs(float64(f.UsedMemMB)-512) > 0.001 {
 		t.Fatalf("usedMem=%v", f.UsedMemMB)
+	}
+	wantMemoryMask := protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted |
+		protocol.MemoryCounterTexture | protocol.MemoryCounterMesh |
+		protocol.MemoryCounterMaterialCount | protocol.MemoryCounterObjectCount
+	if f.MemoryCounterMask != wantMemoryMask {
+		t.Fatalf("memory counter mask=%#x, want %#x", f.MemoryCounterMask, wantMemoryMask)
+	}
+	if f.CommittedMemMB != 768 || f.TextureMemMB != 30 || f.MeshMemMB != 3 || f.MaterialCount != 1003 || f.ObjectCount != 4310 {
+		t.Fatalf("memory editor counters=%+v", f)
 	}
 	if math.Abs(float64(f.GCAllocKB)-4) > 0.001 {
 		t.Fatalf("gcAlloc=%v", f.GCAllocKB)

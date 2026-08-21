@@ -13,6 +13,15 @@ const frame = emptyFrame({
   renderMs: 6,
   usedMemMB: 512,
   reservedMB: 700,
+  committedMemMB: 900,
+  textureMemMB: 30,
+  meshMemMB: 3,
+  materialCount: 1003,
+  objectCount: 4310,
+  textureCount: 594,
+  meshCount: 166,
+  gameObjectCount: 4310,
+  sceneObjectCount: 15974,
   gcUsedMB: 180,
   gcReservedMB: 240,
   gfxUsedMB: 160,
@@ -46,10 +55,32 @@ describe('ProfilerDetail', () => {
     expect(screen.getByText('选择一帧以查看详情')).toBeInTheDocument();
   });
 
+  it('Memory Simple 复刻 Editor 的 committed、breakdown 与对象统计结构', () => {
+    render(<ProfilerDetail moduleId="memory" frame={frame} />);
+    expect(screen.getByTestId('memory-simple')).toBeInTheDocument();
+    expect(screen.getByText('Total Committed Memory')).toBeInTheDocument();
+    expect(screen.getByText('Tracked Memory')).toBeInTheDocument();
+    expect(screen.getAllByText('Untracked Memory')).toHaveLength(2);
+    expect(screen.getByText('Total Memory Breakdown')).toBeInTheDocument();
+    expect(screen.getByText('Graphics & Graphics Driver')).toBeInTheDocument();
+    expect(screen.getByText('Object Statistics')).toBeInTheDocument();
+    expect(screen.getByText('Textures')).toBeInTheDocument();
+    expect(screen.getByText('Scene Objects')).toBeInTheDocument();
+  });
+
   it('Memory Detailed 页签提示不支持快照', async () => {
     render(<ProfilerDetail moduleId="memory" frame={frame} />);
     await userEvent.click(screen.getByRole('tab', { name: 'Detailed' }));
     expect(screen.getByText(/内存快照/)).toBeInTheDocument();
+  });
+
+  it('Memory 掩码将未采集计数器显示为 —，不显示为零', () => {
+    const partial = emptyFrame({ memoryCounterMask: 1 << 6, audioUsedMB: 3.5 });
+    render(<ProfilerDetail moduleId="memory" frame={partial} />);
+    const simple = screen.getByTestId('memory-simple');
+    expect(simple).toHaveTextContent('Audio');
+    expect(simple).toHaveTextContent('3.5 MB');
+    expect(simple).toHaveTextContent(/未提供 App Committed Memory/);
   });
 
   it('Rendering / Audio / Physics / UI / GPU 计数器', () => {

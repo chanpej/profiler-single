@@ -37,6 +37,11 @@ func TestLoadOfficialUnity2022Data(t *testing.T) {
 	if first.TimestampMs == 0 || first.FPS < 29 || first.FPS > 30 || first.CPUTimeMs < 33 || first.CPUTimeMs > 34 || first.CPURenderingMs <= 0 || first.CPUScriptsMs <= 0 {
 		t.Fatalf("first frame = %+v", first)
 	}
+	// Unity 2022.3 .data 仅在 AllProfilerStats 中保留 Audio Used Memory；其它
+	// Memory/* 逐帧计数器不在该离线格式中，不能伪装成测得的零值。
+	if first.MemoryCounterMask != protocol.MemoryCounterAudioUsed || first.AudioUsedMB < 3.04 || first.AudioUsedMB > 3.05 {
+		t.Fatalf("first frame memory = mask %#x, audio %.5f MB", first.MemoryCounterMask, first.AudioUsedMB)
+	}
 	if len(file.Frames[0].MainThread) == 0 || file.Frames[0].MainThread[0].Name != "Main Thread" || !hasSample(file.Frames[0].MainThread, "PlayerLoop") {
 		t.Fatalf("hierarchy = %+v", file.Frames[0].MainThread)
 	}
@@ -99,6 +104,21 @@ func findSample(nodes []protocol.SampleNode, name string) (protocol.SampleNode, 
 		}
 	}
 	return protocol.SampleNode{}, false
+}
+
+func TestReadStatsAndAuxiliaryReadsAudioMemory(t *testing.T) {
+	block := make([]byte, 33*4+4+4+16*4+1060+8*4)
+	// id/value 表以 -1 结束；Audio Used Memory 是 AllProfilerStats 的 656 偏移。
+	binary.LittleEndian.PutUint32(block[33*4+4:], ^uint32(0))
+	audioOffset := 33*4 + 4 + 4 + 16*4 + 656
+	binary.LittleEndian.PutUint32(block[audioOffset:], 3*1024*1024+512*1024)
+	frame := protocol.FrameData{}
+	if err := readStatsAndAuxiliary(&reader{b: block}, &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.MemoryCounterMask != protocol.MemoryCounterAudioUsed || frame.AudioUsedMB != 3.5 {
+		t.Fatalf("memory = %+v", frame)
+	}
 }
 
 func TestReadGCAllocMetadataAssociatesSampleSizes(t *testing.T) {

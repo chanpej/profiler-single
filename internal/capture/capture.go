@@ -270,7 +270,8 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	if cpuUS == 0 {
 		return protocol.FrameData{}, nil, true, nil
 	}
-	if err := skipStatsAndAuxiliary(r); err != nil {
+	frame := protocol.FrameData{FrameIndex: uint64(frameID), TimestampMs: int64(startNS / 1_000_000), FPS: float32(1_000_000 / float64(cpuUS)), CPUTimeMs: float32(cpuUS) / 1_000, MainThreadMs: float32(cpuUS) / 1_000, GPUTimeMs: float32(gpuUS) / 1_000}
+	if err := readStatsAndAuxiliary(r, &frame); err != nil {
 		return protocol.FrameData{}, nil, false, err
 	}
 	if err := readMarkers(r, markers); err != nil {
@@ -281,10 +282,8 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 		return protocol.FrameData{}, nil, false, err
 	}
 
-	cpuMS := float32(cpuUS) / 1_000
-	frame := protocol.FrameData{FrameIndex: uint64(frameID), TimestampMs: int64(startNS / 1_000_000), FPS: float32(1_000_000 / float64(cpuUS)), CPUTimeMs: cpuMS, MainThreadMs: cpuMS, GPUTimeMs: float32(gpuUS) / 1_000}
 	if len(mainSamples) == 0 {
-		frame.CPUOthersMs = cpuMS
+		frame.CPUOthersMs = frame.CPUTimeMs
 		return frame, nil, false, nil
 	}
 	hierarchy, err := buildForest(mainSamples, markers, startNS)
@@ -303,7 +302,7 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	return frame, hierarchy, false, nil
 }
 
-func skipStatsAndAuxiliary(r *reader) error {
+func readStatsAndAuxiliary(r *reader, frame *protocol.FrameData) error {
 	// MemoryStats: 33 fields, one unused value, id/value pairs ending with -1, then 16 platform values.
 	r.skip(33 * 4)
 	r.skip(4)
@@ -311,8 +310,18 @@ func skipStatsAndAuxiliary(r *reader) error {
 		r.skip(4)
 	}
 	r.skip(16 * 4)
-	// Remaining fixed AllProfilerStats for 0x20220328.
-	r.skip(1060)
+	// Unity 2022.3 的 AllProfilerStats 是固定 1060 字节。该离线格式没有
+	// 序列化大多数 Memory/* 计数器（上面的 MemoryStats 在实际 .data 中为零），
+	// 但 Audio Used Memory 位于已验证的 656 偏移，单位为 bytes。
+	const allProfilerStatsSize = 1060
+	const audioUsedOffset = 656
+	if !r.need(allProfilerStatsSize) {
+		return r.err
+	}
+	audioBytes := binary.LittleEndian.Uint32(r.b[r.pos+audioUsedOffset:])
+	frame.AudioUsedMB = float32(audioBytes) / (1024 * 1024)
+	frame.MemoryCounterMask |= protocol.MemoryCounterAudioUsed
+	r.skip(allProfilerStatsSize)
 	for _, size := range []int{64, 44} {
 		n := int(r.i32())
 		if n < 0 || n > maxThreadsPerFrame {

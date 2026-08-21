@@ -3,6 +3,7 @@ import { isUserCancelled } from './userCancel';
 
 const IMPORT_FILTERS = [
   { DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' },
+  { DisplayName: 'Unity Profiler Proxy Capture (*.uppc)', Pattern: '*.uppc' },
   { DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' },
 ];
 const EXPORT_FILTERS = [{ DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' }];

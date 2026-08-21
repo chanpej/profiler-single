@@ -1,6 +1,6 @@
 import type { FrameData, ProfilerModuleId } from '../types';
 
-export type SeriesUnit = 'ms' | 'mb' | 'count';
+export type SeriesUnit = 'ms' | 'mb' | 'kb' | 'count';
 
 export interface CategoryDef {
   id: string;
@@ -58,13 +58,39 @@ export const CPU_CATEGORIES: CategoryDef[] = [
   { id: 'others', label: 'Others', color: '#5D6D7E', unit: 'ms', get: (f) => cpuOthersMs(f) },
 ];
 
+// 与后端 protocol.MemoryCounter* 常量一致。掩码缺省代表旧采集，数值仍按可用显示。
+export const MEMORY_COUNTER_BITS = {
+  totalUsed: 1 << 0,
+  totalReserved: 1 << 1,
+  gcUsed: 1 << 2,
+  gcReserved: 1 << 3,
+  gfxUsed: 1 << 4,
+  gfxReserved: 1 << 5,
+  audioUsed: 1 << 6,
+  videoUsed: 1 << 7,
+  profilerUsed: 1 << 8,
+  profilerReserved: 1 << 9,
+  systemUsed: 1 << 10,
+  committed: 1 << 11,
+  texture: 1 << 12,
+  mesh: 1 << 13,
+  materialCount: 1 << 14,
+  objectCount: 1 << 15,
+  textureCount: 1 << 16,
+  meshCount: 1 << 17,
+  gameObjectCount: 1 << 18,
+  sceneObjectCount: 1 << 19,
+} as const;
+
+// Unity Editor Memory 模块顶部折线图的指标，不是 Simple 视图的 Breakdown。
 export const MEMORY_CATEGORIES: CategoryDef[] = [
-  { id: 'gc', label: 'GC', color: '#E8A838', unit: 'mb', get: (f) => f.gcUsedMB },
-  { id: 'gfx', label: 'Gfx', color: '#2E8B4A', unit: 'mb', get: (f) => f.gfxUsedMB },
-  { id: 'audio', label: 'Audio', color: '#8E44AD', unit: 'mb', get: (f) => f.audioUsedMB },
-  { id: 'video', label: 'Video', color: '#D35400', unit: 'mb', get: (f) => f.videoUsedMB },
-  { id: 'profiler', label: 'Profiler', color: '#7F8C8D', unit: 'mb', get: (f) => f.profilerUsedMB },
-  { id: 'system', label: 'System', color: '#5D6D7E', unit: 'mb', get: (f) => f.systemUsedMB },
+  { id: 'total', label: 'Total Memory', color: '#E8A838', unit: 'mb', get: (f) => f.usedMemMB },
+  { id: 'texture', label: 'Texture Memory', color: '#37A8C9', unit: 'mb', get: (f) => f.textureMemMB },
+  { id: 'mesh', label: 'Mesh Memory', color: '#55B97C', unit: 'mb', get: (f) => f.meshMemMB },
+  { id: 'materialCount', label: 'Material Count', color: '#A86CD5', unit: 'count', get: (f) => f.materialCount },
+  { id: 'objectCount', label: 'Object Count', color: '#D35400', unit: 'count', get: (f) => f.objectCount },
+  { id: 'gc', label: 'GC Used Memory', color: '#E05D44', unit: 'mb', get: (f) => f.gcUsedMB },
+  { id: 'gcAlloc', label: 'GC Allocated In Frame', color: '#C0C6D1', unit: 'kb', get: (f) => f.gcAllocKB },
 ];
 
 export const PROFILER_MODULES: ModuleDef[] = [
@@ -105,7 +131,8 @@ export const PROFILER_MODULES: ModuleDef[] = [
     id: 'memory',
     label: 'Memory',
     color: '#E8A838',
-    stacked: true,
+    // Memory 是不同单位的独立折线，不能按分类堆叠。
+    stacked: false,
     categories: MEMORY_CATEGORIES,
     headline: (f) => ({ value: f.usedMemMB, unit: 'mb' }),
   },
@@ -249,15 +276,76 @@ export function chartMax(mod: ModuleDef, series: SeriesPoint[]): number {
   return peak * 1.15;
 }
 
-export function memorySimpleRows(frame: FrameData) {
+export interface MemoryMetric {
+  id: keyof typeof MEMORY_COUNTER_BITS;
+  label: string;
+  value: number;
+}
+
+/** 旧采集没有掩码时保留既有行为；新采集可明确区分“0”和“未采集”。 */
+export function memoryMetricAvailable(frame: FrameData, id: keyof typeof MEMORY_COUNTER_BITS): boolean {
+  return frame.memoryCounterMask == null || (frame.memoryCounterMask & MEMORY_COUNTER_BITS[id]) !== 0;
+}
+
+export interface MemoryBreakdownRow {
+  id: string;
+  label: string;
+  color: string;
+  used: number;
+  reserved?: number;
+  available: boolean;
+}
+
+/** 将 Player 的原始 Memory 计数器归并成 Unity Editor Simple 视图的语义。 */
+export function memoryEditorSummary(frame: FrameData) {
+  const available = (id: keyof typeof MEMORY_COUNTER_BITS) => memoryMetricAvailable(frame, id);
+  const committed = available('committed') ? frame.committedMemMB
+    : (available('systemUsed') ? frame.systemUsedMB : 0);
+  const committedAvailable = available('committed') || available('systemUsed');
+  const trackedAvailable = available('totalUsed') && available('totalReserved');
+  const untracked = committedAvailable && available('totalReserved')
+    ? Math.max(committed - frame.reservedMB, 0)
+    : 0;
+  const knownUsed = frame.gcUsedMB + frame.gfxUsedMB + frame.audioUsedMB + frame.videoUsedMB + frame.profilerUsedMB;
+  const knownReserved = frame.gcReservedMB + frame.gfxReservedMB + frame.profilerReservedMB;
+  const breakdown: MemoryBreakdownRow[] = [
+    { id: 'managed', label: 'Managed Heap', color: '#8AA32D', used: frame.gcUsedMB, reserved: frame.gcReservedMB, available: available('gcUsed') },
+    { id: 'graphics', label: 'Graphics & Graphics Driver', color: '#35A8C8', used: frame.gfxUsedMB, reserved: frame.gfxReservedMB, available: available('gfxUsed') },
+    { id: 'audio', label: 'Audio', color: '#58B98A', used: frame.audioUsedMB, available: available('audioUsed') },
+    { id: 'video', label: 'Video', color: '#D7B43E', used: frame.videoUsedMB, available: available('videoUsed') },
+    {
+      id: 'other', label: 'Other', color: '#76808C',
+      used: trackedAvailable ? Math.max(frame.usedMemMB - knownUsed, 0) : 0,
+      reserved: trackedAvailable ? Math.max(frame.reservedMB - knownReserved, 0) : undefined,
+      available: trackedAvailable,
+    },
+    { id: 'profiler', label: 'Profiler', color: '#4D9B88', used: frame.profilerUsedMB, reserved: frame.profilerReservedMB, available: available('profilerUsed') },
+  ];
+  return {
+    committed,
+    committedAvailable,
+    trackedUsed: frame.usedMemMB,
+    trackedReserved: frame.reservedMB,
+    trackedAvailable,
+    untracked,
+    untrackedAvailable: committedAvailable && available('totalReserved'),
+    breakdown,
+  };
+}
+
+/** Unity Memory Simple 页签中可由 Player Profiler 计数器提供的原始项目。 */
+export function memorySimpleRows(frame: FrameData): MemoryMetric[] {
   return [
-    { label: 'Total', used: frame.usedMemMB, reserved: frame.reservedMB },
-    { label: 'GC', used: frame.gcUsedMB, reserved: frame.gcReservedMB },
-    { label: 'GfxDriver', used: frame.gfxUsedMB, reserved: frame.gfxReservedMB },
-    { label: 'Audio', used: frame.audioUsedMB, reserved: 0 },
-    { label: 'Video', used: frame.videoUsedMB, reserved: 0 },
-    { label: 'Profiler', used: frame.profilerUsedMB, reserved: frame.profilerReservedMB },
-    { label: 'System', used: frame.systemUsedMB, reserved: 0 },
+    { id: 'totalUsed', label: 'Total Used Memory', value: frame.usedMemMB },
+    { id: 'totalReserved', label: 'Total Reserved Memory', value: frame.reservedMB },
+    { id: 'gcUsed', label: 'GC Used Memory', value: frame.gcUsedMB },
+    { id: 'gcReserved', label: 'GC Reserved Memory', value: frame.gcReservedMB },
+    { id: 'gfxUsed', label: 'Gfx Used Memory', value: frame.gfxUsedMB },
+    { id: 'gfxReserved', label: 'Gfx Reserved Memory', value: frame.gfxReservedMB },
+    { id: 'audioUsed', label: 'Audio Used Memory', value: frame.audioUsedMB },
+    { id: 'videoUsed', label: 'Video Used Memory', value: frame.videoUsedMB },
+    { id: 'profilerUsed', label: 'Profiler Used Memory', value: frame.profilerUsedMB },
+    { id: 'profilerReserved', label: 'Profiler Reserved Memory', value: frame.profilerReservedMB },
   ];
 }
 

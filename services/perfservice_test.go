@@ -371,6 +371,28 @@ func hierarchyHas(nodes []protocol.SampleNode, name string) bool {
 	return false
 }
 
+func TestImportUPPCReplaysFullMemoryCounters(t *testing.T) {
+	path := filepath.Join("..", "test", "same-session.uppc")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("same-session UPPC fixture is not available")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newTestService()
+	n, err := svc.ImportCapture(path)
+	if err != nil {
+		t.Fatalf("ImportCapture: %v", err)
+	}
+	if n != 321 || !svc.Status().HasRaw || svc.Status().SourceFile != path {
+		t.Fatalf("loaded session: frames=%d status=%+v", n, svc.Status())
+	}
+	frame := svc.FrameAt(21)
+	if frame.CommittedMemMB <= 0 || frame.UsedMemMB <= 0 || frame.TextureMemMB <= 0 || frame.MemoryCounterMask == 0 {
+		t.Fatalf("UPPC Memory frame = %+v", frame)
+	}
+}
+
 func TestExportAndImportUPACReplaysRawPD3U(t *testing.T) {
 	source := newTestService()
 	for _, body := range unityprofiler.SampleProfilerCapture() {

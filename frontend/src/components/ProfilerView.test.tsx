@@ -57,6 +57,17 @@ describe('ProfilerView', () => {
     expect(screen.queryByTestId('profiler-chart-audio')).not.toBeInTheDocument();
   });
 
+  it('Memory 图使用 Unity Editor 的内存与对象指标', () => {
+    renderView();
+    const chart = screen.getByTestId('profiler-chart-memory');
+    expect(chart).toHaveAttribute('data-memory', 'true');
+    expect(chart).toHaveClass('profiler-chart--memory');
+    expect(chart).toHaveTextContent('Total Memory');
+    expect(chart).toHaveTextContent('Texture Memory');
+    expect(chart).toHaveTextContent('Material Count');
+    expect(chart).toHaveTextContent('GC Allocated In Frame');
+  });
+
   it('可开关 Profiler 模块', async () => {
     renderView();
     await userEvent.click(screen.getByLabelText('Audio'));
@@ -79,7 +90,7 @@ describe('ProfilerView', () => {
     renderView();
     await userEvent.click(screen.getByLabelText('Memory'));
     expect(screen.getByTestId('memory-simple')).toBeInTheDocument();
-    expect(screen.getByText('GfxDriver')).toBeInTheDocument();
+    expect(screen.getByText('Graphics & Graphics Driver')).toBeInTheDocument();
   });
 
   it('Clear 按钮触发回调', async () => {

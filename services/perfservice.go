@@ -22,6 +22,7 @@ import (
 	"unityperfagent/internal/device"
 	"unityperfagent/internal/llm"
 	"unityperfagent/internal/profileframe"
+	"unityperfagent/internal/profilerproxy"
 	"unityperfagent/internal/protocol"
 	"unityperfagent/internal/unityprofiler"
 	"unityperfagent/internal/upac"
@@ -566,10 +567,14 @@ func (p *PerfService) ImportCapture(path string) (int, error) {
 	if path == "" {
 		return 0, errors.New("加载路径为空")
 	}
-	if strings.EqualFold(filepath.Ext(path), ".upac") {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".upac":
 		return p.importUPAC(path)
+	case ".uppc":
+		return p.importUPPC(path)
+	default:
+		return p.importUnityData(path)
 	}
-	return p.importUnityData(path)
 }
 
 func (p *PerfService) importUnityData(path string) (int, error) {
@@ -598,19 +603,49 @@ func (p *PerfService) importUPAC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPAC 存档：%w", err)
 	}
-	frames, err := unityprofiler.ReplayFramesWithProgress(file.Raw, func(done, total int) {
-		p.emitImportProgress(fileName, "parse", done, total, false, &last)
+	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, &last)
+}
+
+// importUPPC loads a transparent Editor↔Player proxy capture. It is a lossless
+// PD3U source and preserves the counters unavailable in Unity Editor .data files.
+func (p *PerfService) importUPPC(path string) (int, error) {
+	fileName := filepath.Base(path)
+	last := time.Time{}
+	p.emitImportProgress(fileName, "read", 0, 1, true, &last)
+	captureFile, err := profilerproxy.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("无法读取 UPPC 原始抓包：%w", err)
+	}
+	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), &last)
+}
+
+func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, last *time.Time) (int, error) {
+	frames, err := unityprofiler.ReplayFramesWithProgress(raw, func(done, total int) {
+		p.emitImportProgress(fileName, "parse", done, total, false, last)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("解析 UPAC 的 PD3U 数据失败：%w", err)
+		return 0, fmt.Errorf("解析 %s 的 PD3U 数据失败：%w", filepath.Ext(path), err)
 	}
 	if len(frames) == 0 {
-		return 0, errors.New("UPAC 存档没有可解析的帧")
+		return 0, fmt.Errorf("%s 存档没有可解析的帧", strings.TrimPrefix(strings.ToUpper(filepath.Ext(path)), "."))
 	}
-	p.emitImportProgress(fileName, "parse", len(file.Raw), len(file.Raw), true, &last)
+	p.emitImportProgress(fileName, "parse", len(raw), len(raw), true, last)
 	p.session.ReplaceFrames(frames)
-	p.session.SetRaw(file.Raw)
-	return p.finishImport(path, file.Handshake)
+	p.session.SetRaw(raw)
+	return p.finishImport(path, handshake)
+}
+
+func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
+	for _, body := range raw {
+		header, err := unityprofiler.ParseStreamHeader(body)
+		if err == nil {
+			return protocol.Handshake{
+				UnityVersion: header.EngineVersion, ProfilerStreamVersion: header.FormatVersion,
+				MainThreadID: header.MainThreadID,
+			}
+		}
+	}
+	return protocol.Handshake{}
 }
 
 func (p *PerfService) finishImport(path string, handshake protocol.Handshake) (int, error) {

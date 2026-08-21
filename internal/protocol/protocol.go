@@ -34,9 +34,37 @@ const MaxPayloadSize = 1 << 20 // 1 MiB
 // LegacyFramePayloadSize 是 v1 帧负载的固定字节数（仅基础字段）。
 const LegacyFramePayloadSize = 8 + 8 + 4*8 + 4*5 // 68
 
-// FramePayloadSize 是 FrameData 二进制编码后的固定字节数（v2，164 字节）。
-// 数据覆盖 Unity Profiler 各模块：CPU 分类、内存细分、渲染、音频、物理、UI。
-const FramePayloadSize = LegacyFramePayloadSize + 4*17 + 4*7 // 164
+// ExtendedFramePayloadSize 是 v2 帧负载的固定字节数。
+const ExtendedFramePayloadSize = LegacyFramePayloadSize + 4*17 + 4*7 // 164
+
+// FramePayloadSize 是 v3 FrameData 二进制编码后的固定字节数。
+// v3 增加 Unity Memory 模块的 committed、资源统计和可用性掩码；解码仍兼容 v1/v2。
+const FramePayloadSize = ExtendedFramePayloadSize + 4*10 // 204
+
+// MemoryCounterMask 标记当前帧实际提供的 Memory 模块计数器。零值表示
+// 来源未声明可用性（兼容旧协议）；前端可据此避免把缺失数据显示成 0。
+const (
+	MemoryCounterTotalUsed uint32 = 1 << iota
+	MemoryCounterTotalReserved
+	MemoryCounterGCUsed
+	MemoryCounterGCReserved
+	MemoryCounterGfxUsed
+	MemoryCounterGfxReserved
+	MemoryCounterAudioUsed
+	MemoryCounterVideoUsed
+	MemoryCounterProfilerUsed
+	MemoryCounterProfilerReserved
+	MemoryCounterSystemUsed
+	MemoryCounterCommitted
+	MemoryCounterTexture
+	MemoryCounterMesh
+	MemoryCounterMaterialCount
+	MemoryCounterObjectCount
+	MemoryCounterTextureCount
+	MemoryCounterMeshCount
+	MemoryCounterGameObjectCount
+	MemoryCounterSceneObjectCount
+)
 
 // FrameData 是一帧的性能采样数据，字段按 Unity Profiler 模块分组。
 type FrameData struct {
@@ -76,6 +104,18 @@ type FrameData struct {
 	ProfilerUsedMB     float32 `json:"profilerUsedMB"`
 	ProfilerReservedMB float32 `json:"profilerReservedMB"`
 	SystemUsedMB       float32 `json:"systemUsedMB"`
+	// Unity Editor Memory 图表与 Simple 视图的补充计数器。
+	CommittedMemMB   float32 `json:"committedMemMB"`
+	TextureMemMB     float32 `json:"textureMemMB"`
+	MeshMemMB        float32 `json:"meshMemMB"`
+	MaterialCount    uint32  `json:"materialCount"`
+	ObjectCount      uint32  `json:"objectCount"`
+	TextureCount     uint32  `json:"textureCount"`
+	MeshCount        uint32  `json:"meshCount"`
+	GameObjectCount  uint32  `json:"gameObjectCount"`
+	SceneObjectCount uint32  `json:"sceneObjectCount"`
+	// MemoryCounterMask 仅用于展示可用性，区分真实 0 与采集源未提供。
+	MemoryCounterMask uint32 `json:"memoryCounterMask"`
 
 	// ---- Rendering / Audio / Physics / UI 模块计数器 ----
 	ShadowCasters     uint32 `json:"shadowCasters"`
@@ -136,16 +176,27 @@ func EncodeFrame(f *FrameData) []byte {
 		le.PutUint32(buf[off:], v)
 		off += 4
 	}
+	// v3 扩展：Unity Editor Memory 图表、Simple 视图与对象统计。
+	for _, v := range []float32{f.CommittedMemMB, f.TextureMemMB, f.MeshMemMB} {
+		le.PutUint32(buf[off:], math.Float32bits(v))
+		off += 4
+	}
+	for _, v := range []uint32{
+		f.MaterialCount, f.ObjectCount, f.TextureCount, f.MeshCount,
+		f.GameObjectCount, f.SceneObjectCount, f.MemoryCounterMask,
+	} {
+		le.PutUint32(buf[off:], v)
+		off += 4
+	}
 	return buf
 }
 
 // DecodeFrame 从二进制负载解码 FrameData。
-// 兼容 v1（68 字节，仅基础字段）与 v2（164 字节，全量字段）两种负载长度；
-// v1 负载解码后扩展字段保持零值。
+// 兼容 v1（68 字节）、v2（164 字节）及 v3（204 字节）；旧负载新增字段保持零值。
 func DecodeFrame(payload []byte) (FrameData, error) {
-	if len(payload) != FramePayloadSize && len(payload) != LegacyFramePayloadSize {
-		return FrameData{}, fmt.Errorf("protocol: frame payload size %d, want %d (v2) or %d (v1)",
-			len(payload), FramePayloadSize, LegacyFramePayloadSize)
+	if len(payload) != FramePayloadSize && len(payload) != ExtendedFramePayloadSize && len(payload) != LegacyFramePayloadSize {
+		return FrameData{}, fmt.Errorf("protocol: frame payload size %d, want %d (v3), %d (v2) or %d (v1)",
+			len(payload), FramePayloadSize, ExtendedFramePayloadSize, LegacyFramePayloadSize)
 	}
 	le := binary.LittleEndian
 	var f FrameData
@@ -188,6 +239,22 @@ func DecodeFrame(payload []byte) (FrameData, error) {
 		&f.ActiveRigidbodies, &f.Colliders, &f.UIBatches, &f.UIVertices,
 	}
 	for _, p := range counters {
+		*p = le.Uint32(payload[off:])
+		off += 4
+	}
+	if len(payload) == ExtendedFramePayloadSize {
+		return f, nil
+	}
+	memoryFloats := []*float32{&f.CommittedMemMB, &f.TextureMemMB, &f.MeshMemMB}
+	for _, p := range memoryFloats {
+		*p = math.Float32frombits(le.Uint32(payload[off:]))
+		off += 4
+	}
+	memoryCounts := []*uint32{
+		&f.MaterialCount, &f.ObjectCount, &f.TextureCount, &f.MeshCount,
+		&f.GameObjectCount, &f.SceneObjectCount, &f.MemoryCounterMask,
+	}
+	for _, p := range memoryCounts {
 		*p = le.Uint32(payload[off:])
 		off += 4
 	}

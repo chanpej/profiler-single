@@ -3,6 +3,8 @@ import { emptyFrame } from './frame';
 import {
   chartMax,
   extractModuleSeries,
+  memoryEditorSummary,
+  memoryMetricAvailable,
   memorySimpleRows,
   moduleBreakdown,
   moduleById,
@@ -86,9 +88,28 @@ describe('chartMax', () => {
 });
 
 describe('memorySimpleRows', () => {
-  it('包含 Total / GC / Gfx 等 Unity Simple 视图行', () => {
+  it('按 Unity 计数器全名列出 Total、GC、Gfx 等 Simple 项目', () => {
     const labels = memorySimpleRows(sample()).map((r) => r.label);
-    expect(labels).toEqual(['Total', 'GC', 'GfxDriver', 'Audio', 'Video', 'Profiler', 'System']);
+    expect(labels).toEqual([
+      'Total Used Memory', 'Total Reserved Memory', 'GC Used Memory', 'GC Reserved Memory',
+      'Gfx Used Memory', 'Gfx Reserved Memory', 'Audio Used Memory', 'Video Used Memory',
+      'Profiler Used Memory', 'Profiler Reserved Memory',
+    ]);
+  });
+
+  it('按 Editor 定义计算 committed、untracked 与 Other', () => {
+    const frame = sample();
+    frame.committedMemMB = 700;
+    const memory = memoryEditorSummary(frame);
+    expect(memory.untracked).toBe(0);
+    expect(memory.breakdown.find((row) => row.id === 'other')?.used).toBe(139);
+  });
+
+  it('计数器掩码将未采集值与实际的零值区分开', () => {
+    const partial = emptyFrame({ memoryCounterMask: 1 << 6, audioUsedMB: 3.5 });
+    expect(memoryMetricAvailable(partial, 'audioUsed')).toBe(true);
+    expect(memoryMetricAvailable(partial, 'totalUsed')).toBe(false);
+    expect(memoryMetricAvailable(emptyFrame(), 'totalUsed')).toBe(true);
   });
 });
 

@@ -36,12 +36,13 @@ describe('captureDialogs', () => {
     await expect(captureDialogs.open()).rejects.toThrow('disk error');
   });
 
-  it('open 多选结果取第一项，并支持 .upac 与 .data', async () => {
-    vi.mocked(Dialogs.OpenFile).mockResolvedValue(['a.upac', 'b.data'] as unknown as string);
+  it('open 多选结果取第一项，并支持 .upac、.uppc 与 .data', async () => {
+    vi.mocked(Dialogs.OpenFile).mockResolvedValue(['a.upac', 'b.uppc'] as unknown as string);
     await expect(captureDialogs.open()).resolves.toBe('a.upac');
     expect(Dialogs.OpenFile).toHaveBeenCalledWith(expect.objectContaining({
       Filters: [
         { DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' },
+        { DisplayName: 'Unity Profiler Proxy Capture (*.uppc)', Pattern: '*.uppc' },
         { DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' },
       ],
     }));

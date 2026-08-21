@@ -521,6 +521,10 @@ body {
   cursor: pointer;
 }
 .profiler-chart.is-active { outline: 1px solid rgba(56, 189, 248, 0.55); outline-offset: -1px; }
+.profiler-chart--memory {
+  grid-template-columns: 220px 1fr;
+  min-height: 170px;
+}
 
 .profiler-chart-meta {
   padding: 8px 10px;
@@ -545,6 +549,15 @@ body {
   color: var(--text-dim);
 }
 .profiler-legend li { display: flex; align-items: center; white-space: nowrap; gap: 4px; }
+.profiler-legend li.is-unavailable,
+.profiler-table tr.is-unavailable { color: var(--text-dim); opacity: 0.72; }
+.profiler-legend-section {
+  color: var(--text);
+  font-weight: 600;
+  margin-top: 2px;
+  padding-top: 3px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
 .profiler-legend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .profiler-legend-val { margin-left: auto; font-size: 10px; }
 
@@ -614,6 +627,46 @@ body {
 .profiler-table td { padding: 4px 8px; border-bottom: 1px solid rgba(35, 41, 54, 0.5); }
 .profiler-table td:last-child, .profiler-table th:last-child { text-align: right; }
 .profiler-table tr.is-selected td { background: rgba(56, 189, 248, 0.12); }
+
+.memory-editor-simple { display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+.memory-editor-section { min-width: 0; }
+.memory-editor-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+.memory-editor-heading h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.memory-bar {
+  height: 18px;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(148, 163, 184, 0.1);
+}
+.memory-bar-segment { display: block; min-width: 1px; height: 100%; }
+.memory-bar-segment.is-untracked {
+  background-image: repeating-linear-gradient(135deg, rgba(15, 23, 42, 0.34) 0 3px, transparent 3px 7px);
+}
+.memory-bar-empty { margin: auto; color: var(--text-dim); font-size: 11px; }
+.memory-editor-rows { margin-top: 4px; }
+.memory-value-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 21px;
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(35, 41, 54, 0.5);
+  font-size: 12px;
+}
+.memory-value-row > span:first-child { min-width: 0; }
+.memory-value-row > span:last-child { flex-shrink: 0; text-align: right; }
+.memory-object-table { max-width: 540px; }
+.memory-object-table th:nth-child(2), .memory-object-table td:nth-child(2),
+.memory-object-table th:nth-child(3), .memory-object-table td:nth-child(3) { text-align: right; }
+.memory-unavailable { margin: 0; font-size: 11px; line-height: 1.45; }
 
 .hierarchy-cell {
   display: flex;

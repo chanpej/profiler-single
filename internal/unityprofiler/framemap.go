@@ -31,6 +31,15 @@ const (
 	ctrProfilerUsed     = "Memory/Profiler Used Memory"
 	ctrProfilerReserved = "Memory/Profiler Reserved Memory"
 	ctrSystemUsed       = "Memory/System Used Memory"
+	ctrCommitted        = "Memory/App Committed Memory"
+	ctrTextureMemory    = "Memory/Texture Memory"
+	ctrMeshMemory       = "Memory/Mesh Memory"
+	ctrMaterialCount    = "Memory/Material Count"
+	ctrObjectCount      = "Memory/Object Count"
+	ctrTextureCount     = "Memory/Texture Count"
+	ctrMeshCount        = "Memory/Mesh Count"
+	ctrGameObjectCount  = "Memory/Game Object Count"
+	ctrSceneObjectCount = "Memory/Scene Object Count"
 	ctrGCAllocInFrame   = "Memory/GC Allocated In Frame"
 
 	ctrPlayingSources = "Audio/Playing Audio Sources"
@@ -111,17 +120,26 @@ func ToFrameData(snap FrameSnapshot) protocol.FrameData {
 	f.UIBatches = pickCount(snap, ctrUIBatches)
 	f.UIVertices = pickCount(snap, ctrUIVertices)
 
-	f.UsedMemMB = pickMB(snap, ctrTotalUsed)
-	f.ReservedMB = pickMB(snap, ctrTotalReserved)
-	f.GCUsedMB = pickMB(snap, ctrGCUsed)
-	f.GCReservedMB = pickMB(snap, ctrGCReserved)
-	f.GfxUsedMB = pickMB(snap, ctrGfxUsed)
-	f.GfxReservedMB = pickMB(snap, ctrGfxReserved)
-	f.AudioUsedMB = pickMB(snap, ctrAudioUsed)
-	f.VideoUsedMB = pickMB(snap, ctrVideoUsed)
-	f.ProfilerUsedMB = pickMB(snap, ctrProfilerUsed)
-	f.ProfilerReservedMB = pickMB(snap, ctrProfilerReserved)
-	f.SystemUsedMB = pickMB(snap, ctrSystemUsed)
+	f.UsedMemMB = pickMemoryMB(&f, snap, ctrTotalUsed, protocol.MemoryCounterTotalUsed)
+	f.ReservedMB = pickMemoryMB(&f, snap, ctrTotalReserved, protocol.MemoryCounterTotalReserved)
+	f.GCUsedMB = pickMemoryMB(&f, snap, ctrGCUsed, protocol.MemoryCounterGCUsed)
+	f.GCReservedMB = pickMemoryMB(&f, snap, ctrGCReserved, protocol.MemoryCounterGCReserved)
+	f.GfxUsedMB = pickMemoryMB(&f, snap, ctrGfxUsed, protocol.MemoryCounterGfxUsed)
+	f.GfxReservedMB = pickMemoryMB(&f, snap, ctrGfxReserved, protocol.MemoryCounterGfxReserved)
+	f.AudioUsedMB = pickMemoryMB(&f, snap, ctrAudioUsed, protocol.MemoryCounterAudioUsed)
+	f.VideoUsedMB = pickMemoryMB(&f, snap, ctrVideoUsed, protocol.MemoryCounterVideoUsed)
+	f.ProfilerUsedMB = pickMemoryMB(&f, snap, ctrProfilerUsed, protocol.MemoryCounterProfilerUsed)
+	f.ProfilerReservedMB = pickMemoryMB(&f, snap, ctrProfilerReserved, protocol.MemoryCounterProfilerReserved)
+	f.SystemUsedMB = pickMemoryMB(&f, snap, ctrSystemUsed, protocol.MemoryCounterSystemUsed)
+	f.CommittedMemMB = pickMemoryMB(&f, snap, ctrCommitted, protocol.MemoryCounterCommitted)
+	f.TextureMemMB = pickMemoryMB(&f, snap, ctrTextureMemory, protocol.MemoryCounterTexture)
+	f.MeshMemMB = pickMemoryMB(&f, snap, ctrMeshMemory, protocol.MemoryCounterMesh)
+	f.MaterialCount = pickMemoryCount(&f, snap, ctrMaterialCount, protocol.MemoryCounterMaterialCount)
+	f.ObjectCount = pickMemoryCount(&f, snap, ctrObjectCount, protocol.MemoryCounterObjectCount)
+	f.TextureCount = pickMemoryCount(&f, snap, ctrTextureCount, protocol.MemoryCounterTextureCount)
+	f.MeshCount = pickMemoryCount(&f, snap, ctrMeshCount, protocol.MemoryCounterMeshCount)
+	f.GameObjectCount = pickMemoryCount(&f, snap, ctrGameObjectCount, protocol.MemoryCounterGameObjectCount)
+	f.SceneObjectCount = pickMemoryCount(&f, snap, ctrSceneObjectCount, protocol.MemoryCounterSceneObjectCount)
 	if v, ok := snap.Counters[ctrGCAllocInFrame]; ok {
 		f.GCAllocKB = float32(v / bytesPerKB)
 	}
@@ -148,9 +166,18 @@ func pickMs(snap FrameSnapshot, key string, fallback float32) float32 {
 	return fallback
 }
 
-func pickMB(snap FrameSnapshot, key string) float32 {
+func pickMemoryMB(f *protocol.FrameData, snap FrameSnapshot, key string, bit uint32) float32 {
 	if v, ok := snap.Counters[key]; ok {
+		f.MemoryCounterMask |= bit
 		return float32(v / bytesPerMB)
+	}
+	return 0
+}
+
+func pickMemoryCount(f *protocol.FrameData, snap FrameSnapshot, key string, bit uint32) uint32 {
+	if v, ok := snap.Counters[key]; ok && v >= 0 {
+		f.MemoryCounterMask |= bit
+		return uint32(v)
 	}
 	return 0
 }
