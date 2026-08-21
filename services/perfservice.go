@@ -24,6 +24,7 @@ import (
 	"unityperfagent/internal/profileframe"
 	"unityperfagent/internal/protocol"
 	"unityperfagent/internal/unityprofiler"
+	"unityperfagent/internal/upac"
 )
 
 // TickEventName 是采集进度事件名，前端据此增量刷新。
@@ -470,7 +471,7 @@ func (p *PerfService) Stats() collector.Stats {
 
 func (p *PerfService) Clear() {
 	connected := p.client.Connected()
-	p.session.Clear()
+	p.session.ClearRecordedData()
 	p.mu.Lock()
 	p.sourceFile = ""
 	p.loadedHS = protocol.Handshake{}
@@ -529,25 +530,49 @@ func (p *PerfService) FrameHierarchy(index int) []protocol.SampleNode {
 	return h
 }
 
-// ExportCapture 不再生成自定义 UPAC 容器。
-// Unity Editor 的 .data 是其私有的已解码离线帧格式，不能通过重命名或封装
-// PlayerConnection 的 PD3U 原始流生成。为避免输出无法被 Unity 打开的伪 .data，
-// 当前不支持从实时采集导出；请在 Unity Editor 中保存该格式。
+// ExportCapture stores the current PD3U stream as a native .upac archive.
+// Unity Editor .data is a private format and is deliberately never generated
+// from live data.
 func (p *PerfService) ExportCapture(path string) error {
-	if strings.TrimSpace(path) == "" {
+	path = strings.TrimSpace(path)
+	if path == "" {
 		return errors.New("导出路径为空")
 	}
-	return errors.New("无法从 PD3U 实时流生成官方 Unity Profiler .data；请在 Unity Editor 中保存")
+	if strings.EqualFold(filepath.Ext(path), ".data") {
+		return errors.New("实时采集只能保存为 .upac；Unity Editor .data 仅支持导入读取")
+	}
+	raw := p.session.Raw()
+	if len(raw) == 0 {
+		return errors.New("没有可导出的原始 PD3U 数据")
+	}
+	hs, _ := p.client.Handshake()
+	p.mu.Lock()
+	if hs == (protocol.Handshake{}) {
+		hs = p.liveHS
+	}
+	p.mu.Unlock()
+	if err := upac.SaveFile(path, upac.File{Handshake: hs, Raw: raw}); err != nil {
+		return fmt.Errorf("保存 UPAC 存档失败：%w", err)
+	}
+	p.logf("已导出 %d 个原始 PD3U 分块 -> %s", len(raw), path)
+	return nil
 }
 
-// ImportCapture 加载 Unity 2022 Editor Profiler 保存的 .data 文件。
-// 离线 .data 帧体与实时 PD3U 流不同，因此不会重放或伪造原始流。
-// 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
+// ImportCapture loads either a native .upac archive or a Unity Editor .data
+// file. .data remains a read-only compatibility input; .upac is the native
+// lossless PD3U session format.
 func (p *PerfService) ImportCapture(path string) (int, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return 0, errors.New("加载路径为空")
 	}
+	if strings.EqualFold(filepath.Ext(path), ".upac") {
+		return p.importUPAC(path)
+	}
+	return p.importUnityData(path)
+}
+
+func (p *PerfService) importUnityData(path string) (int, error) {
 	fileName := filepath.Base(path)
 	last := time.Time{}
 	p.emitImportProgress(fileName, "read", 0, 1, true, &last)
@@ -555,17 +580,44 @@ func (p *PerfService) ImportCapture(path string) (int, error) {
 		p.emitImportProgress(fileName, "parse", int(done), int(total), false, &last)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("无法读取存档：%w", err)
+		return 0, fmt.Errorf("无法读取 Unity Editor .data：%w", err)
 	}
 	if len(file.Frames) == 0 {
 		return 0, errors.New("Profiler .data 没有可解析的帧")
 	}
 	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
 	p.session.ReplaceFrames(file.Frames)
+	return p.finishImport(path, file.Handshake)
+}
+
+func (p *PerfService) importUPAC(path string) (int, error) {
+	fileName := filepath.Base(path)
+	last := time.Time{}
+	p.emitImportProgress(fileName, "read", 0, 1, true, &last)
+	file, err := upac.LoadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("无法读取 UPAC 存档：%w", err)
+	}
+	frames, err := unityprofiler.ReplayFramesWithProgress(file.Raw, func(done, total int) {
+		p.emitImportProgress(fileName, "parse", done, total, false, &last)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("解析 UPAC 的 PD3U 数据失败：%w", err)
+	}
+	if len(frames) == 0 {
+		return 0, errors.New("UPAC 存档没有可解析的帧")
+	}
+	p.emitImportProgress(fileName, "parse", len(file.Raw), len(file.Raw), true, &last)
+	p.session.ReplaceFrames(frames)
+	p.session.SetRaw(file.Raw)
+	return p.finishImport(path, file.Handshake)
+}
+
+func (p *PerfService) finishImport(path string, handshake protocol.Handshake) (int, error) {
 	connected := p.client.Connected()
 	p.mu.Lock()
 	p.sourceFile = path
-	p.loadedHS = file.Handshake
+	p.loadedHS = handshake
 	p.captureRaw = false
 	if connected {
 		p.recording = false

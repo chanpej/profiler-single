@@ -108,6 +108,19 @@ func (s *Session) Clear() {
 	}
 }
 
+// ClearRecordedData starts a new capture interval while retaining the PD3U
+// stream header. Subsequent raw chunks can therefore be exported and replayed
+// without retaining data from before the user pressed Clear.
+func (s *Session) ClearRecordedData() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.head, s.size, s.total = 0, 0, 0
+	for i := range s.frames {
+		s.frames[i] = profileframe.Frame{}
+	}
+	s.raw, s.rawBytes = nil, 0
+}
+
 // ClearAll 清空帧数据与原始 Profiler 流（重新连接时使用）。
 func (s *Session) ClearAll() {
 	s.mu.Lock()

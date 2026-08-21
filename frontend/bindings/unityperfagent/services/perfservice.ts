@@ -108,10 +108,9 @@ export function ExportAgentChat(path: string, content: string): $CancellableProm
 }
 
 /**
- * ExportCapture 不再生成自定义 UPAC 容器。
- * Unity Editor 的 .data 是其私有的已解码离线帧格式，不能通过重命名或封装
- * PlayerConnection 的 PD3U 原始流生成。为避免输出无法被 Unity 打开的伪 .data，
- * 当前不支持从实时采集导出；请在 Unity Editor 中保存该格式。
+ * ExportCapture stores the current PD3U stream as a native .upac archive.
+ * Unity Editor .data is a private format and is deliberately never generated
+ * from live data.
  */
 export function ExportCapture(path: string): $CancellablePromise<void> {
     return $Call.ByID(240066965, path);
@@ -137,9 +136,9 @@ export function Frames(offset: number, limit: number): $CancellablePromise<proto
 }
 
 /**
- * ImportCapture 加载 Unity 2022 Editor Profiler 保存的 .data 文件。
- * 离线 .data 帧体与实时 PD3U 流不同，因此不会重放或伪造原始流。
- * 若仍连接真机，会自动暂停抓取，避免实时帧冲掉刚加载的数据。
+ * ImportCapture loads either a native .upac archive or a Unity Editor .data
+ * file. .data remains a read-only compatibility input; .upac is the native
+ * lossless PD3U session format.
  */
 export function ImportCapture(path: string): $CancellablePromise<number> {
     return $Call.ByID(724188008, path);

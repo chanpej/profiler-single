@@ -371,6 +371,30 @@ func hierarchyHas(nodes []protocol.SampleNode, name string) bool {
 	return false
 }
 
+func TestExportAndImportUPACReplaysRawPD3U(t *testing.T) {
+	source := newTestService()
+	for _, body := range unityprofiler.SampleProfilerCapture() {
+		source.onRaw(body)
+	}
+	path := filepath.Join(t.TempDir(), "session.upac")
+	if err := source.ExportCapture(path); err != nil {
+		t.Fatalf("ExportCapture: %v", err)
+	}
+
+	loaded := newTestService()
+	n, err := loaded.ImportCapture(path)
+	if err != nil {
+		t.Fatalf("ImportCapture: %v", err)
+	}
+	if n != 1 || loaded.Status().HasRaw != true {
+		t.Fatalf("loaded session: frames=%d status=%+v", n, loaded.Status())
+	}
+	frame := loaded.FrameAt(0)
+	if frame.FrameIndex != 1 || frame.CPUTimeMs <= 0 {
+		t.Fatalf("replayed frame = %+v", frame)
+	}
+}
+
 func TestImportPercent(t *testing.T) {
 	if got := importPercent(0, 0); got != 0 {
 		t.Fatalf("empty=%d", got)
@@ -427,20 +451,20 @@ func TestImportCaptureEmitsProgress(t *testing.T) {
 	}
 }
 
-func TestImportUPACFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.upac")
+func TestImportTruncatedUPACFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "truncated.upac")
 	if err := os.WriteFile(path, []byte("UPAC"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc := newTestService()
-	if _, err := svc.ImportCapture(path); err == nil || !strings.Contains(err.Error(), "格式版本") {
+	if _, err := svc.ImportCapture(path); err == nil || !strings.Contains(err.Error(), "UPAC") {
 		t.Fatalf("err=%v", err)
 	}
 }
 
-func TestExportRejectsPseudoData(t *testing.T) {
+func TestExportRejectsUnityDataExtension(t *testing.T) {
 	svc := newTestService()
-	if err := svc.ExportCapture(filepath.Join(t.TempDir(), "capture.data")); err == nil || !strings.Contains(err.Error(), "PD3U") {
+	if err := svc.ExportCapture(filepath.Join(t.TempDir(), "capture.data")); err == nil || !strings.Contains(err.Error(), ".upac") {
 		t.Fatalf("err=%v", err)
 	}
 }

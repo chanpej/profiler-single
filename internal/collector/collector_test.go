@@ -388,6 +388,25 @@ func TestRawRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClearRecordedDataRetainsOnlyStreamHeader(t *testing.T) {
+	s := NewSession(4)
+	header := []byte{'P', 'D', '3', 'U', 1}
+	s.AppendRaw(header)
+	s.AppendRaw([]byte{9, 8, 7})
+	s.Append(frameN(1))
+
+	s.ClearRecordedData()
+	got := s.Raw()
+	if s.Len() != 0 || s.Total() != 0 || len(got) != 1 || !bytesEqual(got[0], header) {
+		t.Fatalf("after ClearRecordedData: frames=%d total=%d raw=%v", s.Len(), s.Total(), got)
+	}
+	s.AppendRaw([]byte{6, 5})
+	got = s.Raw()
+	if len(got) != 2 || !bytesEqual(got[0], header) || !bytesEqual(got[1], []byte{6, 5}) {
+		t.Fatalf("raw after next capture = %v", got)
+	}
+}
+
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

@@ -185,6 +185,10 @@ function App() {
       setImportProgress(null);
     }
   });
+  const onExport = () => guard(async () => {
+    const path = await captureDialogs.save();
+    if (path) await api.exportCapture(path);
+  });
   const onClear = () => guard(() => api.clear());
   const onDeepProfiling = (on: boolean) => {
     guard(() => api.setDeepProfiling(on));
@@ -208,6 +212,7 @@ function App() {
       <TitleBar controls={windowControls} />
       <MenuBar
         onImport={onImport}
+        onExport={onExport}
         onClear={onClear}
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}

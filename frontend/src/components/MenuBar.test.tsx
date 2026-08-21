@@ -7,7 +7,7 @@ function renderBar(over: Partial<Parameters<typeof MenuBar>[0]> = {}) {
   return render(
     <MenuBar
       onImport={vi.fn()}
-
+      onExport={vi.fn()}
       onClear={vi.fn()}
       onFrames={vi.fn()}
       onAnalysis={vi.fn()}
@@ -28,14 +28,18 @@ describe('MenuBar', () => {
     expect(screen.getByRole('menuitem', { name: '设置' })).toBeInTheDocument();
   });
 
-  it('文件菜单触发加载 / 清空', async () => {
+  it('文件菜单触发加载 / 保存 / 清空', async () => {
     const onImport = vi.fn();
+    const onExport = vi.fn();
     const onClear = vi.fn();
-    renderBar({ onImport, onClear });
+    renderBar({ onImport, onExport, onClear });
     await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '加载数据' }));
     expect(onImport).toHaveBeenCalled();
 
+    await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '保存数据 (.upac)' }));
+    expect(onExport).toHaveBeenCalled();
 
     await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '清空数据' }));

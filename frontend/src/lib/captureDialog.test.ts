@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 vi.mock('@wailsio/runtime', () => ({
   Dialogs: {
     OpenFile: vi.fn(),
+    SaveFile: vi.fn(),
   },
 }));
 
@@ -13,6 +14,7 @@ describe('captureDialogs', () => {
   beforeEach(() => {
 
     vi.mocked(Dialogs.OpenFile).mockReset();
+    vi.mocked(Dialogs.SaveFile).mockReset();
   });
 
 
@@ -34,11 +36,23 @@ describe('captureDialogs', () => {
     await expect(captureDialogs.open()).rejects.toThrow('disk error');
   });
 
-  it('open 多选结果取第一项，并限制为 .data', async () => {
-    vi.mocked(Dialogs.OpenFile).mockResolvedValue(['a.data', 'b.data'] as unknown as string);
-    await expect(captureDialogs.open()).resolves.toBe('a.data');
+  it('open 多选结果取第一项，并支持 .upac 与 .data', async () => {
+    vi.mocked(Dialogs.OpenFile).mockResolvedValue(['a.upac', 'b.data'] as unknown as string);
+    await expect(captureDialogs.open()).resolves.toBe('a.upac');
     expect(Dialogs.OpenFile).toHaveBeenCalledWith(expect.objectContaining({
-      Filters: [{ DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' }],
+      Filters: [
+        { DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' },
+        { DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' },
+      ],
+    }));
+  });
+
+  it('save 使用 .upac 文件名和过滤器', async () => {
+    vi.mocked(Dialogs.SaveFile).mockResolvedValue('capture.upac');
+    await expect(captureDialogs.save()).resolves.toBe('capture.upac');
+    expect(Dialogs.SaveFile).toHaveBeenCalledWith(expect.objectContaining({
+      Filename: expect.stringMatching(/^profiler-.*\.upac$/),
+      Filters: [{ DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' }],
     }));
   });
 });

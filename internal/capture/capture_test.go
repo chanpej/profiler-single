@@ -130,14 +130,7 @@ func TestDecodeRejectsUPAC(t *testing.T) {
 
 func TestDecodeRejectsCorruptFrameEndMarker(t *testing.T) {
 	var b bytes.Buffer
-	header := make([]byte, blockHeaderSize)
-	binary.LittleEndian.PutUint32(header[0:], unity2022DataVersion)
-	binary.LittleEndian.PutUint32(header[4:], 4)
-	binary.LittleEndian.PutUint32(header[8:], 2022)
-	binary.LittleEndian.PutUint32(header[12:], 3)
-	binary.LittleEndian.PutUint32(header[16:], 47)
-	binary.LittleEndian.PutUint32(header[20:], 2)
-	binary.LittleEndian.PutUint32(header[24:], 1)
+	header := testDataHeader(4)
 	b.Write(header)
 	b.Write(make([]byte, 4))
 	binary.Write(&b, binary.LittleEndian, fileEndMarker)
@@ -145,6 +138,49 @@ func TestDecodeRejectsCorruptFrameEndMarker(t *testing.T) {
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("结束标记")) {
 		t.Fatalf("err = %v, want frame end-marker error", err)
 	}
+}
+
+func TestDecodeRejectsSyntheticFrameWithoutGatheredData(t *testing.T) {
+	var b bytes.Buffer
+	body := make([]byte, 32)
+	binary.LittleEndian.PutUint32(body[0:], 1)
+	binary.LittleEndian.PutUint32(body[4:], 1)
+	binary.LittleEndian.PutUint32(body[16:], 16_000)
+	binary.LittleEndian.PutUint32(body[28:], frameEndMarker)
+	b.Write(testDataHeader(uint32(len(body))))
+	b.Write(body)
+	binary.Write(&b, binary.LittleEndian, fileEndMarker)
+
+	_, err := Decode(&b)
+	if !errors.Is(err, ErrIncompleteFrame) {
+		t.Fatalf("err = %v, want ErrIncompleteFrame", err)
+	}
+}
+
+func TestLoadPerfAgentSyntheticFixtureRejected(t *testing.T) {
+	path := filepath.Join("..", "..", "test", "testdata", "perfagent-profiler.data")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("synthetic PerfAgent fixture is not available")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadFile(path)
+	if !errors.Is(err, ErrIncompleteFrame) {
+		t.Fatalf("err = %v, want ErrIncompleteFrame", err)
+	}
+}
+
+func testDataHeader(bodySize uint32) []byte {
+	header := make([]byte, blockHeaderSize)
+	binary.LittleEndian.PutUint32(header[0:], unity2022DataVersion)
+	binary.LittleEndian.PutUint32(header[4:], bodySize)
+	binary.LittleEndian.PutUint32(header[8:], 2022)
+	binary.LittleEndian.PutUint32(header[12:], 3)
+	binary.LittleEndian.PutUint32(header[16:], 47)
+	binary.LittleEndian.PutUint32(header[20:], 2)
+	binary.LittleEndian.PutUint32(header[24:], 1)
+	return header
 }
 
 func TestLoadFileDoesNotAcceptOldUPAC(t *testing.T) {

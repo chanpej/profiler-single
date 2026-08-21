@@ -4,6 +4,7 @@ export type MenuId = 'file' | 'view';
 
 interface Props {
   onImport: () => void;
+  onExport: () => void;
   onClear: () => void;
   onFrames: () => void;
   onAnalysis: () => void;
@@ -15,7 +16,7 @@ interface Props {
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  onImport, onClear, onFrames, onAnalysis, onSettings, onOpenAgentLog, onToggleAgent, agentCollapsed = false,
+  onImport, onExport, onClear, onFrames, onAnalysis, onSettings, onOpenAgentLog, onToggleAgent, agentCollapsed = false,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -65,6 +66,9 @@ export function MenuBar({
           <div className="menubar-dropdown" role="menu">
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onImport)}>
               加载数据
+            </button>
+            <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onExport)}>
+              保存数据 (.upac)
             </button>
 
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onClear)}>

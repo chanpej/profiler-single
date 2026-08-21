@@ -31,6 +31,7 @@ const (
 var (
 	ErrUnsupportedFormat  = errors.New("不是 Unity 2022 Profiler .data 文件")
 	ErrUnsupportedVersion = errors.New("Profiler .data 格式版本不受支持")
+	ErrIncompleteFrame    = errors.New("Profiler .data 帧缺少 Unity Editor 采集数据")
 )
 
 // File 是从 Unity Editor Profiler .data 文件读取的会话。
@@ -253,12 +254,18 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	startNS := r.u64()
 	cpuUS := r.i32()
 	gpuUS := r.i32()
-	r.i32() // gathered data
+	gatheredData := r.u32()
 	if r.err != nil {
 		return protocol.FrameData{}, nil, false, r.err
 	}
 	if frameID != duplicateID {
 		return protocol.FrameData{}, nil, false, fmt.Errorf("帧编号不一致：%d != %d", frameID, duplicateID)
+	}
+	if cpuUS != 0 && gatheredData == 0 {
+		// Unity Editor emits at least one gathered-data flag for each recorded
+		// frame. A zero value identifies the old synthetic writer, which emitted
+		// only enough of the private layout for this package to round-trip.
+		return protocol.FrameData{}, nil, false, ErrIncompleteFrame
 	}
 	if cpuUS == 0 {
 		return protocol.FrameData{}, nil, true, nil

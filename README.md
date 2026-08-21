@@ -22,6 +22,9 @@ internal/unityprofiler  Unity 2022 Editor Profiler 协议（逆向实现）
                         USB PlayerConnection：GUID 报文 + Editor 握手（UnityEditor）+ Profiler enable
                         协议单测假 Player：TCP GeneralConnection magic 0xDAFEDADA
                         Connect=1 / Disconnect=2 / ProfilerFrame=0x20
+internal/profilerproxy  可复用的透明 PlayerConnection 代理，抓取 Editor 接收的原始 PD3U
+cmd/profilerproxy       透明代理命令，用于生成同一 Editor 会话的 .uppc / .data 对照样本
+internal/upac           原生会话存档：握手元信息 + 原始 PD3U 分块的版本化容器
 internal/protocol       Profiler 模块快照编码（FrameData 164 字节，兼容 v1 68 字节）
                         作为 ProfilerFrame 载荷；握手校验 Unity 2022
 internal/device         Profiler 客户端封装
@@ -59,6 +62,16 @@ frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数�
 
 外部程序（ACP Agent 等 exe）一律通过 `procutil` 启动，Windows 下隐藏控制台黑窗。
 
+## 存档格式
+
+- **`.upac`**：UnityPerfAgent 的正式会话格式。保存握手元信息和完整的原始 PD3U
+  报文体；打开时使用当前 Decoder 重放，因此后续解码能力升级后仍可重新分析旧存档。
+  实时采集只能保存为此格式。
+- **`.data`**：Unity Editor Profiler 的私有离线格式，仅支持导入读取。工具不会从
+  PD3U 或 UI 摘要帧伪造 `.data`，以避免生成 Editor 无法打开的文件。
+- **`.uppc`**：透明抓包代理的研究格式，仅用于保存同一 Editor 会话的原始 PD3U
+  对照数据，不作为常规用户存档。
+
 ## Profiler UI
 
 主视图还原 Unity Profiler 2022 的交互：
@@ -80,8 +93,8 @@ frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数�
 ### MCP 性能数据工具
 
 每次创建 Agent 会话时，应用会通过 ACP 的 `session/new.mcpServers` 注入内置
-stdio MCP Server。Agent 可按需查询当前内存中的实时采集数据或已加载的 Unity 2022
-`.data` 帧数据，而不是只依赖预先生成的规则报告：
+stdio MCP Server。Agent 可按需查询当前内存中的实时采集数据、已加载的 `.upac`
+存档或 Unity 2022 `.data` 帧数据，而不是只依赖预先生成的规则报告：
 
 - `performance_session_summary`：连接状态、聚合指标与规则分析；
 - `performance_frames`：范围帧摘要（单次最多 200 帧）；
@@ -120,3 +133,29 @@ cd frontend && npm test  # 前端测试（vitest + testing-library）
 3. 之后 Player 按帧推送 Profiler 模块计数器快照（CPU 分类、内存分项、渲染/音频/物理/UI）。
 
 生产包无法 Attach Profiler。
+
+## Unity Editor 对照抓包
+
+`cmd/profilerproxy` 是长期保留的透明代理：它逐条转发 Unity Editor 与 Player
+之间的 PlayerConnection 报文，只记录 Player → Editor 的 `MsgIDProfilerData`
+报文体。输出的 `.uppc` 是本工具的 PD3U 对照格式，不是 Unity `.data`。
+
+1. 先将 Android Player 转发到本机端口，例如：
+
+   ```bash
+   adb forward tcp:55000 localabstract:Unity-<包名>
+   ```
+
+2. 启动代理：
+
+   ```bash
+   go run ./cmd/profilerproxy -listen 127.0.0.1:55018 -target 127.0.0.1:55000 -out test/same-session.uppc
+   ```
+
+3. 在 Unity Editor 的 **Profiler → Attach to Player → Enter IP** 中填写
+   `127.0.0.1:55018`，录制所需帧，然后在该 Profiler 窗口执行 **Save**，保存为
+   `same-session.data`；
+4. 断开 Editor，代理会写出 `same-session.uppc`。请保留这两个文件，用于验证
+   PD3U Decoder 与 Unity Editor 对同一会话的帧对齐关系。
+
+代理不会修改或重编码任何 PlayerConnection 报文，也不会生成 `.data`。
