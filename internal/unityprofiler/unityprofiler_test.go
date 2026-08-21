@@ -494,7 +494,8 @@ func TestToFrameDataMapsCounters(t *testing.T) {
 	}
 	wantMemoryMask := protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted |
 		protocol.MemoryCounterTexture | protocol.MemoryCounterMesh |
-		protocol.MemoryCounterMaterialCount | protocol.MemoryCounterObjectCount
+		protocol.MemoryCounterMaterialCount | protocol.MemoryCounterObjectCount |
+		protocol.MemoryCounterGCAllocatedFrame
 	if f.MemoryCounterMask != wantMemoryMask {
 		t.Fatalf("memory counter mask=%#x, want %#x", f.MemoryCounterMask, wantMemoryMask)
 	}

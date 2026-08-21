@@ -65,7 +65,17 @@ describe('ProfilerView', () => {
     expect(chart).toHaveTextContent('Total Memory');
     expect(chart).toHaveTextContent('Texture Memory');
     expect(chart).toHaveTextContent('Material Count');
+    expect(chart).toHaveTextContent('Audio Used Memory');
     expect(chart).toHaveTextContent('GC Allocated In Frame');
+  });
+
+  it('.data 的仅 Audio Memory 帧仍显示有效曲线和当前值', () => {
+    const dataFrame = emptyFrame({ memoryCounterMask: 1 << 6, audioUsedMB: 3.5 });
+    renderView({ frames: [dataFrame] });
+    const chart = screen.getByTestId('profiler-chart-memory');
+    expect(chart).toHaveTextContent('Audio Used Memory');
+    expect(chart).toHaveTextContent('3.5 MB');
+    expect(chart).toHaveTextContent('—');
   });
 
   it('可开关 Profiler 模块', async () => {

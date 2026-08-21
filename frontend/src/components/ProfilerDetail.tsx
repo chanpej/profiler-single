@@ -365,7 +365,9 @@ function MemorySimple({ frame }: { frame: FrameData }) {
   const objectRows = [
     { label: 'Textures', count: frame.textureCount, size: frame.textureMemMB, available: memoryMetricAvailable(frame, 'textureCount') && memoryMetricAvailable(frame, 'texture') },
     { label: 'Meshes', count: frame.meshCount, size: frame.meshMemMB, available: memoryMetricAvailable(frame, 'meshCount') && memoryMetricAvailable(frame, 'mesh') },
-    { label: 'Materials', count: frame.materialCount, available: memoryMetricAvailable(frame, 'materialCount') },
+    { label: 'Materials', count: frame.materialCount, size: frame.materialMemMB, available: memoryMetricAvailable(frame, 'materialCount') && memoryMetricAvailable(frame, 'material') },
+    { label: 'Animation Clips', count: frame.animationClipCount, size: frame.animationClipMemMB, available: memoryMetricAvailable(frame, 'animationClipCount') && memoryMetricAvailable(frame, 'animationClip') },
+    { label: 'Assets', count: frame.assetCount, available: memoryMetricAvailable(frame, 'assetCount') },
     { label: 'Game Objects', count: frame.gameObjectCount, available: memoryMetricAvailable(frame, 'gameObjectCount') },
     { label: 'Scene Objects', count: frame.sceneObjectCount, available: memoryMetricAvailable(frame, 'sceneObjectCount') },
   ];
@@ -389,6 +391,17 @@ function MemorySimple({ frame }: { frame: FrameData }) {
         <div className="memory-editor-rows">
           <MemoryValueRow label="Tracked Memory" available={summary.trackedAvailable} used={summary.trackedUsed} reserved={summary.trackedReserved} />
           <MemoryValueRow label="Untracked Memory" available={summary.untrackedAvailable} used={summary.untracked} />
+        </div>
+      </section>
+      <section className="memory-editor-section" aria-labelledby="memory-gc-title">
+        <div className="memory-editor-heading"><h3 id="memory-gc-title">GC Allocated In Frame</h3></div>
+        <div className="memory-editor-rows">
+          <MemoryValueRow
+            label="GC Allocated In Frame"
+            available={memoryMetricAvailable(frame, 'gcAllocationFrameCount') && memoryMetricAvailable(frame, 'gcAllocatedFrame')}
+            used={frame.gcAllocatedFrameKB}
+            count={frame.gcAllocationFrameCount}
+          />
         </div>
       </section>
       <section className="memory-editor-section" aria-labelledby="memory-breakdown-title">
@@ -421,7 +434,7 @@ function MemorySimple({ frame }: { frame: FrameData }) {
       </section>
       {!summary.committedAvailable && (
         <p className="dim memory-unavailable">
-          当前帧未提供 App Committed Memory。Unity Editor .data 兼容导入仍在补齐该统计块；实时采集或 .upac 原始存档可提供完整 Memory 数据。
+          当前帧未记录 App Committed Memory。已保存的 Memory 计数器（例如 Audio Used Memory）会正常显示；其余统计需在采集时由 Unity 写入，或使用原始 .uppc / .upac 存档。
         </p>
       )}
     </div>
@@ -444,11 +457,11 @@ function MemoryBar({ total, segments }: { total: number; segments: { label: stri
   );
 }
 
-function MemoryValueRow({ label, color, available, used, reserved }: { label: string; color?: string; available: boolean; used: number; reserved?: number }) {
+function MemoryValueRow({ label, color, available, used, reserved, count }: { label: string; color?: string; available: boolean; used: number; reserved?: number; count?: number }) {
   return (
     <div className={`memory-value-row ${available ? '' : 'is-unavailable'}`}>
       <span>{color && <span className="swatch" style={{ background: color }} />}{label}</span>
-      <span className="mono">{available ? (reserved == null ? formatMB1(used) : `${formatMB1(used)} / ${formatMB1(reserved)}`) : '—'}</span>
+      <span className="mono">{available ? (count == null ? (reserved == null ? formatMB1(used) : `${formatMB1(used)} / ${formatMB1(reserved)}`) : `${formatCount(count)} / ${formatGCAlloc(used)}`) : '—'}</span>
     </div>
   );
 }

@@ -20,6 +20,12 @@ const frame = emptyFrame({
   objectCount: 4310,
   textureCount: 594,
   meshCount: 166,
+  materialMemMB: 2.8,
+  animationClipCount: 163,
+  animationClipMemMB: 4.5,
+  assetCount: 36237,
+  gcAllocationFrameCount: 1,
+  gcAllocatedFrameKB: 0.0859375,
   gameObjectCount: 4310,
   sceneObjectCount: 15974,
   gcUsedMB: 180,
@@ -65,6 +71,10 @@ describe('ProfilerDetail', () => {
     expect(screen.getByText('Graphics & Graphics Driver')).toBeInTheDocument();
     expect(screen.getByText('Object Statistics')).toBeInTheDocument();
     expect(screen.getByText('Textures')).toBeInTheDocument();
+    expect(screen.getByText('Animation Clips')).toBeInTheDocument();
+    expect(screen.getByText('Assets')).toBeInTheDocument();
+    expect(screen.getAllByText('GC Allocated In Frame')).toHaveLength(2);
+    expect(screen.getByText('1 / 88.0 B')).toBeInTheDocument();
     expect(screen.getByText('Scene Objects')).toBeInTheDocument();
   });
 
@@ -80,7 +90,7 @@ describe('ProfilerDetail', () => {
     const simple = screen.getByTestId('memory-simple');
     expect(simple).toHaveTextContent('Audio');
     expect(simple).toHaveTextContent('3.5 MB');
-    expect(simple).toHaveTextContent(/未提供 App Committed Memory/);
+    expect(simple).toHaveTextContent(/未记录 App Committed Memory/);
   });
 
   it('Rendering / Audio / Physics / UI / GPU 计数器', () => {

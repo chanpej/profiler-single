@@ -35,6 +35,7 @@ function memoryMetricForSeries(id: string): MemoryMetricId | null {
     materialCount: 'materialCount',
     objectCount: 'objectCount',
     gc: 'gcUsed',
+    audio: 'audioUsed',
   };
   return metrics[id] ?? null;
 }
@@ -54,9 +55,13 @@ export function ProfilerChart({
   const selectedFrame = frames[selectedIndex];
   const isMemory = module.id === 'memory';
   const chartHeight = height ?? (isMemory ? 170 : 88);
-  const headline = selectedFrame && (!isMemory || memoryMetricAvailable(selectedFrame, 'totalUsed'))
-    ? module.headline(selectedFrame)
-    : null;
+  const headline = selectedFrame && isMemory
+    ? (memoryMetricAvailable(selectedFrame, 'totalUsed')
+      ? module.headline(selectedFrame)
+      : (memoryMetricAvailable(selectedFrame, 'audioUsed')
+        ? { value: selectedFrame.audioUsedMB, unit: 'mb' as const }
+        : null))
+    : (selectedFrame ? module.headline(selectedFrame) : null);
 
   useEffect(() => {
     const canvas = canvasRef.current;

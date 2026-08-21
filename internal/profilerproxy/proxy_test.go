@@ -127,20 +127,53 @@ func TestProxyFixtureReplaysAgainstEditorData(t *testing.T) {
 	if len(frames) < len(editorFile.Frames)+warmupFrames {
 		t.Fatalf("PD3U frames=%d cannot cover %d Editor frames after %d warmup frames", len(frames), len(editorFile.Frames), warmupFrames)
 	}
-	var maxCPUDelta float64
+	var maxCPUDelta, maxMemoryDelta float64
 	for i, editorFrame := range editorFile.Frames {
 		pd3uFrame := frames[i+warmupFrames]
 		delta := math.Abs(float64(pd3uFrame.Summary.CPUTimeMs - editorFrame.Summary.CPUTimeMs))
 		if delta > maxCPUDelta {
 			maxCPUDelta = delta
 		}
+		for _, pair := range [][2]float32{
+			{pd3uFrame.Summary.UsedMemMB, editorFrame.Summary.UsedMemMB},
+			{pd3uFrame.Summary.ReservedMB, editorFrame.Summary.ReservedMB},
+			{pd3uFrame.Summary.GCUsedMB, editorFrame.Summary.GCUsedMB},
+			{pd3uFrame.Summary.GfxUsedMB, editorFrame.Summary.GfxUsedMB},
+			{pd3uFrame.Summary.AudioUsedMB, editorFrame.Summary.AudioUsedMB},
+			{pd3uFrame.Summary.TextureMemMB, editorFrame.Summary.TextureMemMB},
+			{pd3uFrame.Summary.MeshMemMB, editorFrame.Summary.MeshMemMB},
+			{pd3uFrame.Summary.MaterialMemMB, editorFrame.Summary.MaterialMemMB},
+			{pd3uFrame.Summary.AnimationClipMemMB, editorFrame.Summary.AnimationClipMemMB},
+			{pd3uFrame.Summary.GCAllocatedFrameKB, editorFrame.Summary.GCAllocatedFrameKB},
+		} {
+			if delta := math.Abs(float64(pair[0] - pair[1])); delta > maxMemoryDelta {
+				maxMemoryDelta = delta
+			}
+		}
+		if pd3uFrame.Summary.TextureCount != editorFrame.Summary.TextureCount ||
+			pd3uFrame.Summary.MeshCount != editorFrame.Summary.MeshCount ||
+			pd3uFrame.Summary.MaterialCount != editorFrame.Summary.MaterialCount ||
+			pd3uFrame.Summary.AnimationClipCount != editorFrame.Summary.AnimationClipCount ||
+			pd3uFrame.Summary.AssetCount != editorFrame.Summary.AssetCount ||
+			pd3uFrame.Summary.GameObjectCount != editorFrame.Summary.GameObjectCount ||
+			pd3uFrame.Summary.SceneObjectCount != editorFrame.Summary.SceneObjectCount ||
+			pd3uFrame.Summary.ObjectCount != editorFrame.Summary.ObjectCount ||
+			pd3uFrame.Summary.GCAllocationFrameCount != editorFrame.Summary.GCAllocationFrameCount {
+			t.Fatalf("Memory counters drifted at Editor frame %d: PD3U=%+v Editor=%+v", i+1, pd3uFrame.Summary, editorFrame.Summary)
+		}
+		if editorFrame.Summary.MemoryCounterMask != (1<<26)-1 {
+			t.Fatalf("Editor frame %d memory mask = %#x, want full Memory counter table", i+1, editorFrame.Summary.MemoryCounterMask)
+		}
 	}
 	if maxCPUDelta > 0.01 {
 		t.Fatalf("PD3U and Editor CPU frame alignment drifted by %.6fms", maxCPUDelta)
 	}
+	if maxMemoryDelta > 0.000001 {
+		t.Fatalf("PD3U and Editor Memory counters drifted by %.9fMB", maxMemoryDelta)
+	}
 	t.Logf("PD3U frame 22=%+v", frames[21].Summary)
 	t.Logf("first Editor=%+v", editorFile.Frames[0].Summary)
-	t.Logf("aligned %d frames after %d warmup frames; max CPU delta %.6fms", len(editorFile.Frames), warmupFrames, maxCPUDelta)
+	t.Logf("aligned %d frames after %d warmup frames; max CPU delta %.6fms; max Memory delta %.9fMB", len(editorFile.Frames), warmupFrames, maxCPUDelta, maxMemoryDelta)
 }
 
 func TestCaptureFileRoundTrip(t *testing.T) {

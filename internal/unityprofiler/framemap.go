@@ -20,27 +20,32 @@ const (
 	ctrVertices     = "Render/Vertices Count"
 	ctrShadowCaster = "Render/Shadow Casters Count"
 
-	ctrTotalUsed        = "Memory/Total Used Memory"
-	ctrTotalReserved    = "Memory/Total Reserved Memory"
-	ctrGCUsed           = "Memory/GC Used Memory"
-	ctrGCReserved       = "Memory/GC Reserved Memory"
-	ctrGfxUsed          = "Memory/Gfx Used Memory"
-	ctrGfxReserved      = "Memory/Gfx Reserved Memory"
-	ctrAudioUsed        = "Memory/Audio Used Memory"
-	ctrVideoUsed        = "Memory/Video Used Memory"
-	ctrProfilerUsed     = "Memory/Profiler Used Memory"
-	ctrProfilerReserved = "Memory/Profiler Reserved Memory"
-	ctrSystemUsed       = "Memory/System Used Memory"
-	ctrCommitted        = "Memory/App Committed Memory"
-	ctrTextureMemory    = "Memory/Texture Memory"
-	ctrMeshMemory       = "Memory/Mesh Memory"
-	ctrMaterialCount    = "Memory/Material Count"
-	ctrObjectCount      = "Memory/Object Count"
-	ctrTextureCount     = "Memory/Texture Count"
-	ctrMeshCount        = "Memory/Mesh Count"
-	ctrGameObjectCount  = "Memory/Game Object Count"
-	ctrSceneObjectCount = "Memory/Scene Object Count"
-	ctrGCAllocInFrame   = "Memory/GC Allocated In Frame"
+	ctrTotalUsed           = "Memory/Total Used Memory"
+	ctrTotalReserved       = "Memory/Total Reserved Memory"
+	ctrGCUsed              = "Memory/GC Used Memory"
+	ctrGCReserved          = "Memory/GC Reserved Memory"
+	ctrGfxUsed             = "Memory/Gfx Used Memory"
+	ctrGfxReserved         = "Memory/Gfx Reserved Memory"
+	ctrAudioUsed           = "Memory/Audio Used Memory"
+	ctrVideoUsed           = "Memory/Video Used Memory"
+	ctrProfilerUsed        = "Memory/Profiler Used Memory"
+	ctrProfilerReserved    = "Memory/Profiler Reserved Memory"
+	ctrSystemUsed          = "Memory/System Used Memory"
+	ctrCommitted           = "Memory/App Committed Memory"
+	ctrTextureMemory       = "Memory/Texture Memory"
+	ctrMeshMemory          = "Memory/Mesh Memory"
+	ctrMaterialCount       = "Memory/Material Count"
+	ctrMaterialMemory      = "Memory/Material Memory"
+	ctrObjectCount         = "Memory/Object Count"
+	ctrTextureCount        = "Memory/Texture Count"
+	ctrMeshCount           = "Memory/Mesh Count"
+	ctrGameObjectCount     = "Memory/Game Object Count"
+	ctrSceneObjectCount    = "Memory/Scene Object Count"
+	ctrAnimationClipMemory = "Memory/AnimationClip Memory"
+	ctrAnimationClipCount  = "Memory/AnimationClip Count"
+	ctrAssetCount          = "Memory/Asset Count"
+	ctrGCAllocFrameCount   = "Memory/GC Allocation In Frame Count"
+	ctrGCAllocInFrame      = "Memory/GC Allocated In Frame"
 
 	ctrPlayingSources = "Audio/Playing Audio Sources"
 	ctrAudioVoices    = "Audio/Total Audio Voices"
@@ -135,13 +140,20 @@ func ToFrameData(snap FrameSnapshot) protocol.FrameData {
 	f.TextureMemMB = pickMemoryMB(&f, snap, ctrTextureMemory, protocol.MemoryCounterTexture)
 	f.MeshMemMB = pickMemoryMB(&f, snap, ctrMeshMemory, protocol.MemoryCounterMesh)
 	f.MaterialCount = pickMemoryCount(&f, snap, ctrMaterialCount, protocol.MemoryCounterMaterialCount)
+	f.MaterialMemMB = pickMemoryMB(&f, snap, ctrMaterialMemory, protocol.MemoryCounterMaterial)
 	f.ObjectCount = pickMemoryCount(&f, snap, ctrObjectCount, protocol.MemoryCounterObjectCount)
 	f.TextureCount = pickMemoryCount(&f, snap, ctrTextureCount, protocol.MemoryCounterTextureCount)
 	f.MeshCount = pickMemoryCount(&f, snap, ctrMeshCount, protocol.MemoryCounterMeshCount)
 	f.GameObjectCount = pickMemoryCount(&f, snap, ctrGameObjectCount, protocol.MemoryCounterGameObjectCount)
 	f.SceneObjectCount = pickMemoryCount(&f, snap, ctrSceneObjectCount, protocol.MemoryCounterSceneObjectCount)
+	f.AnimationClipMemMB = pickMemoryMB(&f, snap, ctrAnimationClipMemory, protocol.MemoryCounterAnimationClip)
+	f.AnimationClipCount = pickMemoryCount(&f, snap, ctrAnimationClipCount, protocol.MemoryCounterAnimationClipCount)
+	f.AssetCount = pickMemoryCount(&f, snap, ctrAssetCount, protocol.MemoryCounterAssetCount)
+	f.GCAllocationFrameCount = pickMemoryCount(&f, snap, ctrGCAllocFrameCount, protocol.MemoryCounterGCAllocationFrameCount)
 	if v, ok := snap.Counters[ctrGCAllocInFrame]; ok {
 		f.GCAllocKB = float32(v / bytesPerKB)
+		f.GCAllocatedFrameKB = float32(v / bytesPerKB)
+		f.MemoryCounterMask |= protocol.MemoryCounterGCAllocatedFrame
 	}
 
 	var known float32

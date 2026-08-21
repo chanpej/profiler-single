@@ -80,6 +80,12 @@ export const MEMORY_COUNTER_BITS = {
   meshCount: 1 << 17,
   gameObjectCount: 1 << 18,
   sceneObjectCount: 1 << 19,
+  material: 1 << 20,
+  animationClip: 1 << 21,
+  animationClipCount: 1 << 22,
+  assetCount: 1 << 23,
+  gcAllocationFrameCount: 1 << 24,
+  gcAllocatedFrame: 1 << 25,
 } as const;
 
 // Unity Editor Memory 模块顶部折线图的指标，不是 Simple 视图的 Breakdown。
@@ -90,7 +96,8 @@ export const MEMORY_CATEGORIES: CategoryDef[] = [
   { id: 'materialCount', label: 'Material Count', color: '#A86CD5', unit: 'count', get: (f) => f.materialCount },
   { id: 'objectCount', label: 'Object Count', color: '#D35400', unit: 'count', get: (f) => f.objectCount },
   { id: 'gc', label: 'GC Used Memory', color: '#E05D44', unit: 'mb', get: (f) => f.gcUsedMB },
-  { id: 'gcAlloc', label: 'GC Allocated In Frame', color: '#C0C6D1', unit: 'kb', get: (f) => f.gcAllocKB },
+  { id: 'audio', label: 'Audio Used Memory', color: '#58B98A', unit: 'mb', get: (f) => f.audioUsedMB },
+  { id: 'gcAlloc', label: 'GC Allocated In Frame', color: '#C0C6D1', unit: 'kb', get: (f) => f.gcAllocatedFrameKB || f.gcAllocKB },
 ];
 
 export const PROFILER_MODULES: ModuleDef[] = [

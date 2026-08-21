@@ -77,8 +77,11 @@ func TestFrameEncodeDecodeRoundTrip(t *testing.T) {
 }
 
 func TestFramePayloadSize(t *testing.T) {
-	if FramePayloadSize != 204 {
-		t.Fatalf("FramePayloadSize = %d, want 204", FramePayloadSize)
+	if FramePayloadSize != 228 {
+		t.Fatalf("FramePayloadSize = %d, want 228", FramePayloadSize)
+	}
+	if MemoryFramePayloadSize != 204 {
+		t.Fatalf("MemoryFramePayloadSize = %d, want 204", MemoryFramePayloadSize)
 	}
 	if ExtendedFramePayloadSize != 164 {
 		t.Fatalf("ExtendedFramePayloadSize = %d, want 164", ExtendedFramePayloadSize)

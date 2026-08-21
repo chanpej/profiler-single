@@ -274,6 +274,11 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	if err := readStatsAndAuxiliary(r, &frame); err != nil {
 		return protocol.FrameData{}, nil, false, err
 	}
+	// Unity Editor 的 Memory 模块不是从前面的 Legacy MemoryStats 读取的。
+	// 它在 RawFrameDataView 中读取帧尾持久化的 profiler counter table；该表
+	// 使用会话内索引而非 marker ID，因此必须按 Unity 2022 固定的 Memory
+	// counter schema 定位。详见 findRawMemoryCounters 的校验条件。
+	findRawMemoryCounters(body[:len(body)-4], &frame)
 	if err := readMarkers(r, markers); err != nil {
 		return protocol.FrameData{}, nil, false, err
 	}
@@ -300,6 +305,139 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 		frame.CPUOthersMs = other
 	}
 	return frame, hierarchy, false, nil
+}
+
+// rawMemoryCounterSchema is the serialized order of Unity 2022.3's built-in
+// Memory profiler counters. The identifier in this table is an ephemeral
+// per-frame counter-store index, rather than the marker ID returned by
+// RawFrameDataView.GetMarkerId, so it cannot be joined directly to the marker
+// definition table. The type/width run and monotonic counter-store IDs make
+// this fixed sequence unambiguous in a frame body. Disabled built-in counters
+// may leave holes in the otherwise ascending counter-store IDs.
+var rawMemoryCounterSchema = [...]uint32{
+	4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+	2, 4, 2, 2, 2, 2, 4, 4, 4, 4, 2, 4, 2, 4, 2, 4, 2, 4, 2, 2,
+}
+
+func rawMemoryCounterSize(valueType uint32) int {
+	switch valueType {
+	case 2:
+		return 4
+	case 4:
+		return 8
+	default:
+		return 0
+	}
+}
+
+// findRawMemoryCounters extracts the exact counters that Unity Editor's
+// MemoryProfilerModule obtains with RawFrameDataView.GetCounterValueAsLong.
+// A record is [counter-store id, value count=1, type, byte size, value].
+// Counter-store IDs are assigned during serialization and vary between frames,
+// hence the strict 34-record type/size/ascending-ID signature plus value
+// invariants below instead of hard-coding a numeric ID.
+func findRawMemoryCounters(body []byte, frame *protocol.FrameData) bool {
+	const records = len(rawMemoryCounterSchema)
+	for start := 0; start+16 <= len(body); start += 4 {
+		pos := start
+		var values [records]uint64
+		var previousID uint32
+		valid := true
+		for i, valueType := range rawMemoryCounterSchema {
+			size := rawMemoryCounterSize(valueType)
+			if pos+16+size > len(body) || binary.LittleEndian.Uint32(body[pos+4:]) != 1 ||
+				binary.LittleEndian.Uint32(body[pos+8:]) != valueType || binary.LittleEndian.Uint32(body[pos+12:]) != uint32(size) {
+				valid = false
+				break
+			}
+			id := binary.LittleEndian.Uint32(body[pos:])
+			// The counter store may omit disabled built-in counters, leaving holes
+			// in its otherwise ordered IDs (for example between Gfx and Texture).
+			// It must nevertheless remain strictly ordered throughout this block.
+			if i > 0 && id <= previousID {
+				valid = false
+				break
+			}
+			previousID = id
+			if size == 4 {
+				values[i] = uint64(binary.LittleEndian.Uint32(body[pos+16:]))
+			} else {
+				values[i] = binary.LittleEndian.Uint64(body[pos+16:])
+			}
+			pos += 16 + size
+		}
+		if !valid || !validRawMemoryValues(values) {
+			continue
+		}
+		applyRawMemoryCounters(values, frame)
+		return true
+	}
+	return false
+}
+
+func validRawMemoryValues(v [len(rawMemoryCounterSchema)]uint64) bool {
+	// These relationships are guaranteed by the Unity Memory module and avoid
+	// accepting an unrelated serialized counter run with the same wire types.
+	return v[4] > 0 && v[4] <= v[5] && v[6] <= v[7] &&
+		v[16] >= v[18] && v[17] >= v[18] && v[23] >= v[25] &&
+		v[24] > 0 && v[26] > 0 && v[28] > 0 && v[30] > 0 && v[33] > 0
+}
+
+func rawBytesToMB(v uint64) float32 { return float32(float64(v) / (1024 * 1024)) }
+
+func applyRawMemoryCounters(v [len(rawMemoryCounterSchema)]uint64, frame *protocol.FrameData) {
+	frame.SystemUsedMB = rawBytesToMB(v[0])
+	frame.CommittedMemMB = rawBytesToMB(v[2])
+	frame.UsedMemMB = rawBytesToMB(v[4])
+	frame.ReservedMB = rawBytesToMB(v[5])
+	frame.GCUsedMB = rawBytesToMB(v[6])
+	frame.GCReservedMB = rawBytesToMB(v[7])
+	frame.ProfilerUsedMB = rawBytesToMB(v[8])
+	frame.ProfilerReservedMB = rawBytesToMB(v[9])
+	frame.AudioUsedMB = rawBytesToMB(v[10])
+	frame.VideoUsedMB = rawBytesToMB(v[12])
+	frame.GfxUsedMB = rawBytesToMB(v[21])
+	frame.GfxReservedMB = rawBytesToMB(v[22])
+	frame.TextureMemMB = rawBytesToMB(v[23])
+	frame.TextureCount = uint32(v[24])
+	frame.MeshMemMB = rawBytesToMB(v[25])
+	frame.MeshCount = uint32(v[26])
+	frame.MaterialCount = uint32(v[28])
+	frame.MaterialMemMB = rawBytesToMB(v[27])
+	frame.AnimationClipMemMB = rawBytesToMB(v[29])
+	frame.AnimationClipCount = uint32(v[30])
+	frame.AssetCount = uint32(v[16])
+	frame.GCAllocationFrameCount = uint32(v[19])
+	frame.GCAllocatedFrameKB = float32(float64(v[20]) / bytesPerKB)
+	frame.ObjectCount = uint32(v[33])
+	frame.GameObjectCount = uint32(v[18])
+	frame.SceneObjectCount = uint32(v[17])
+	frame.MemoryCounterMask |= protocol.MemoryCounterSystemUsed |
+		protocol.MemoryCounterCommitted |
+		protocol.MemoryCounterTotalUsed |
+		protocol.MemoryCounterTotalReserved |
+		protocol.MemoryCounterGCUsed |
+		protocol.MemoryCounterGCReserved |
+		protocol.MemoryCounterProfilerUsed |
+		protocol.MemoryCounterProfilerReserved |
+		protocol.MemoryCounterAudioUsed |
+		protocol.MemoryCounterVideoUsed |
+		protocol.MemoryCounterGfxUsed |
+		protocol.MemoryCounterGfxReserved |
+		protocol.MemoryCounterTexture |
+		protocol.MemoryCounterTextureCount |
+		protocol.MemoryCounterMesh |
+		protocol.MemoryCounterMeshCount |
+		protocol.MemoryCounterMaterialCount |
+		protocol.MemoryCounterMaterial |
+		protocol.MemoryCounterObjectCount |
+		protocol.MemoryCounterGameObjectCount |
+		protocol.MemoryCounterSceneObjectCount |
+		protocol.MemoryCounterAnimationClip |
+		protocol.MemoryCounterAnimationClipCount |
+		protocol.MemoryCounterAssetCount |
+		protocol.MemoryCounterGCAllocationFrameCount |
+		protocol.MemoryCounterGCAllocatedFrame
 }
 
 func readStatsAndAuxiliary(r *reader, frame *protocol.FrameData) error {

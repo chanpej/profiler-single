@@ -37,10 +37,14 @@ func TestLoadOfficialUnity2022Data(t *testing.T) {
 	if first.TimestampMs == 0 || first.FPS < 29 || first.FPS > 30 || first.CPUTimeMs < 33 || first.CPUTimeMs > 34 || first.CPURenderingMs <= 0 || first.CPUScriptsMs <= 0 {
 		t.Fatalf("first frame = %+v", first)
 	}
-	// Unity 2022.3 .data 仅在 AllProfilerStats 中保留 Audio Used Memory；其它
-	// Memory/* 逐帧计数器不在该离线格式中，不能伪装成测得的零值。
-	if first.MemoryCounterMask != protocol.MemoryCounterAudioUsed || first.AudioUsedMB < 3.04 || first.AudioUsedMB > 3.05 {
-		t.Fatalf("first frame memory = mask %#x, audio %.5f MB", first.MemoryCounterMask, first.AudioUsedMB)
+	// 与 Unity Editor RawFrameDataView 首帧读数一致；这些值来自帧尾
+	// counter table，不是旧 AllProfilerStats 的零值占位。
+	if first.MemoryCounterMask != (1<<26)-1 || first.UsedMemMB <= 0 || first.ReservedMB < first.UsedMemMB ||
+		first.GCUsedMB <= 0 || first.GCReservedMB < first.GCUsedMB || first.TextureCount == 0 ||
+		first.MeshCount == 0 || first.MaterialCount == 0 || first.AnimationClipCount == 0 ||
+		first.AssetCount == 0 || first.ObjectCount == 0 || first.TextureMemMB <= 0 ||
+		first.MeshMemMB <= 0 || first.MaterialMemMB <= 0 || first.AnimationClipMemMB <= 0 {
+		t.Fatalf("first frame memory = %+v", first)
 	}
 	if len(file.Frames[0].MainThread) == 0 || file.Frames[0].MainThread[0].Name != "Main Thread" || !hasSample(file.Frames[0].MainThread, "PlayerLoop") {
 		t.Fatalf("hierarchy = %+v", file.Frames[0].MainThread)

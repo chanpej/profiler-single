@@ -58,6 +58,12 @@ export interface FrameData {
     "meshCount": number;
     "gameObjectCount": number;
     "sceneObjectCount": number;
+    "materialMemMB": number;
+    "animationClipMemMB": number;
+    "animationClipCount": number;
+    "assetCount": number;
+    "gcAllocationFrameCount": number;
+    "gcAllocatedFrameKB": number;
 
     /**
      * MemoryCounterMask 仅用于展示可用性，区分真实 0 与采集源未提供。

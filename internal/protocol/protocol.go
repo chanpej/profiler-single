@@ -37,9 +37,13 @@ const LegacyFramePayloadSize = 8 + 8 + 4*8 + 4*5 // 68
 // ExtendedFramePayloadSize 是 v2 帧负载的固定字节数。
 const ExtendedFramePayloadSize = LegacyFramePayloadSize + 4*17 + 4*7 // 164
 
-// FramePayloadSize 是 v3 FrameData 二进制编码后的固定字节数。
-// v3 增加 Unity Memory 模块的 committed、资源统计和可用性掩码；解码仍兼容 v1/v2。
-const FramePayloadSize = ExtendedFramePayloadSize + 4*10 // 204
+// MemoryFramePayloadSize is the v3 size retained for backwards-compatible
+// decoding of captures produced before the detailed object statistics.
+const MemoryFramePayloadSize = ExtendedFramePayloadSize + 4*10 // 204
+
+// FramePayloadSize 是 v4 FrameData 二进制编码后的固定字节数。
+// v4 补齐 Unity Memory Simple 视图中的材质、AnimationClip、Assets 与 GC 行。
+const FramePayloadSize = MemoryFramePayloadSize + 4*6 // 228
 
 // MemoryCounterMask 标记当前帧实际提供的 Memory 模块计数器。零值表示
 // 来源未声明可用性（兼容旧协议）；前端可据此避免把缺失数据显示成 0。
@@ -64,6 +68,12 @@ const (
 	MemoryCounterMeshCount
 	MemoryCounterGameObjectCount
 	MemoryCounterSceneObjectCount
+	MemoryCounterMaterial
+	MemoryCounterAnimationClip
+	MemoryCounterAnimationClipCount
+	MemoryCounterAssetCount
+	MemoryCounterGCAllocationFrameCount
+	MemoryCounterGCAllocatedFrame
 )
 
 // FrameData 是一帧的性能采样数据，字段按 Unity Profiler 模块分组。
@@ -105,15 +115,21 @@ type FrameData struct {
 	ProfilerReservedMB float32 `json:"profilerReservedMB"`
 	SystemUsedMB       float32 `json:"systemUsedMB"`
 	// Unity Editor Memory 图表与 Simple 视图的补充计数器。
-	CommittedMemMB   float32 `json:"committedMemMB"`
-	TextureMemMB     float32 `json:"textureMemMB"`
-	MeshMemMB        float32 `json:"meshMemMB"`
-	MaterialCount    uint32  `json:"materialCount"`
-	ObjectCount      uint32  `json:"objectCount"`
-	TextureCount     uint32  `json:"textureCount"`
-	MeshCount        uint32  `json:"meshCount"`
-	GameObjectCount  uint32  `json:"gameObjectCount"`
-	SceneObjectCount uint32  `json:"sceneObjectCount"`
+	CommittedMemMB         float32 `json:"committedMemMB"`
+	TextureMemMB           float32 `json:"textureMemMB"`
+	MeshMemMB              float32 `json:"meshMemMB"`
+	MaterialCount          uint32  `json:"materialCount"`
+	ObjectCount            uint32  `json:"objectCount"`
+	TextureCount           uint32  `json:"textureCount"`
+	MeshCount              uint32  `json:"meshCount"`
+	GameObjectCount        uint32  `json:"gameObjectCount"`
+	SceneObjectCount       uint32  `json:"sceneObjectCount"`
+	MaterialMemMB          float32 `json:"materialMemMB"`
+	AnimationClipMemMB     float32 `json:"animationClipMemMB"`
+	AnimationClipCount     uint32  `json:"animationClipCount"`
+	AssetCount             uint32  `json:"assetCount"`
+	GCAllocationFrameCount uint32  `json:"gcAllocationFrameCount"`
+	GCAllocatedFrameKB     float32 `json:"gcAllocatedFrameKB"`
 	// MemoryCounterMask 仅用于展示可用性，区分真实 0 与采集源未提供。
 	MemoryCounterMask uint32 `json:"memoryCounterMask"`
 
@@ -188,15 +204,23 @@ func EncodeFrame(f *FrameData) []byte {
 		le.PutUint32(buf[off:], v)
 		off += 4
 	}
+	for _, v := range []float32{f.MaterialMemMB, f.AnimationClipMemMB, f.GCAllocatedFrameKB} {
+		le.PutUint32(buf[off:], math.Float32bits(v))
+		off += 4
+	}
+	for _, v := range []uint32{f.AnimationClipCount, f.AssetCount, f.GCAllocationFrameCount} {
+		le.PutUint32(buf[off:], v)
+		off += 4
+	}
 	return buf
 }
 
 // DecodeFrame 从二进制负载解码 FrameData。
 // 兼容 v1（68 字节）、v2（164 字节）及 v3（204 字节）；旧负载新增字段保持零值。
 func DecodeFrame(payload []byte) (FrameData, error) {
-	if len(payload) != FramePayloadSize && len(payload) != ExtendedFramePayloadSize && len(payload) != LegacyFramePayloadSize {
-		return FrameData{}, fmt.Errorf("protocol: frame payload size %d, want %d (v3), %d (v2) or %d (v1)",
-			len(payload), FramePayloadSize, ExtendedFramePayloadSize, LegacyFramePayloadSize)
+	if len(payload) != FramePayloadSize && len(payload) != MemoryFramePayloadSize && len(payload) != ExtendedFramePayloadSize && len(payload) != LegacyFramePayloadSize {
+		return FrameData{}, fmt.Errorf("protocol: frame payload size %d, want %d (v4), %d (v3), %d (v2) or %d (v1)",
+			len(payload), FramePayloadSize, MemoryFramePayloadSize, ExtendedFramePayloadSize, LegacyFramePayloadSize)
 	}
 	le := binary.LittleEndian
 	var f FrameData
@@ -255,6 +279,17 @@ func DecodeFrame(payload []byte) (FrameData, error) {
 		&f.GameObjectCount, &f.SceneObjectCount, &f.MemoryCounterMask,
 	}
 	for _, p := range memoryCounts {
+		*p = le.Uint32(payload[off:])
+		off += 4
+	}
+	if len(payload) == MemoryFramePayloadSize {
+		return f, nil
+	}
+	for _, p := range []*float32{&f.MaterialMemMB, &f.AnimationClipMemMB, &f.GCAllocatedFrameKB} {
+		*p = math.Float32frombits(le.Uint32(payload[off:]))
+		off += 4
+	}
+	for _, p := range []*uint32{&f.AnimationClipCount, &f.AssetCount, &f.GCAllocationFrameCount} {
 		*p = le.Uint32(payload[off:])
 		off += 4
 	}
