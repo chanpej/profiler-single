@@ -204,6 +204,28 @@ export interface SeriesPoint {
   values: number[];
 }
 
+/** CPU 图手动 Y 轴的可用范围（ms）。0 始终是图表基线，不允许向负方向扩展。 */
+export const CPU_CHART_MIN_Y = 0.01;
+export const CPU_CHART_MAX_Y = 60_000;
+/** CPU 图初始及重置时的正向 Y 轴上限（ms）。 */
+export const DEFAULT_CPU_CHART_MAX_Y = 100;
+
+/** 图表纵轴标签统一显示为不带单位的整数，避免占用有限的轨道宽度。 */
+export function formatChartAxisValue(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  return String(Math.max(0, Math.round(value)));
+}
+
+/**
+ * 用鼠标拖动或滚轮按比例调整 CPU 图正向 Y 轴上限。
+ * delta 为向下的距离：向下扩大范围，向上缩小范围。
+ */
+export function adjustCpuChartMax(current: number, delta: number): number {
+  const safeCurrent = Number.isFinite(current) && current > 0 ? current : 33.4;
+  const safeDelta = Number.isFinite(delta) ? delta : 0;
+  return Math.min(CPU_CHART_MAX_Y, Math.max(CPU_CHART_MIN_Y, safeCurrent * Math.exp(safeDelta * 0.012)));
+}
+
 /** 从帧序列提取某个 Profiler 模块的时间轴序列。 */
 export function extractModuleSeries(mod: ModuleDef, frames: FrameData[]): SeriesPoint[] {
   const series = mod.categories.map((c) => ({
@@ -278,7 +300,9 @@ export function chartMax(mod: ModuleDef, series: SeriesPoint[]): number {
       }
     }
   }
-  if (mod.id === 'cpu' || mod.id === 'gpu') return Math.max(peak * 1.1, 33.4);
+  if (mod.id === 'cpu') return Math.max(peak * 1.1, 33.4);
+  // GPU Usage 与 Rendering 固定以 100 为上限；超出部分由图表顶部的溢出标识提示。
+  if (mod.id === 'gpu' || mod.id === 'rendering') return 100;
   if (peak <= 0) return 1;
   return peak * 1.15;
 }

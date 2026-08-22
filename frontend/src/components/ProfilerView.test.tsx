@@ -55,6 +55,9 @@ describe('ProfilerView', () => {
     expect(screen.getByTestId('profiler-chart-cpu')).toBeInTheDocument();
     expect(screen.getByTestId('profiler-chart-memory')).toBeInTheDocument();
     expect(screen.queryByTestId('profiler-chart-audio')).not.toBeInTheDocument();
+    for (const id of ['cpu', 'gpu', 'rendering', 'memory']) {
+      expect(screen.getByTestId(`profiler-chart-${id}`)).toHaveAttribute('data-y-axis-width', '42');
+    }
   });
 
   it('Memory 图使用 Unity Editor 的内存与对象指标', () => {
@@ -84,6 +87,19 @@ describe('ProfilerView', () => {
     expect(screen.getByTestId('profiler-chart-audio')).toBeInTheDocument();
     await userEvent.click(screen.getByLabelText('CPU Usage'));
     expect(screen.queryByTestId('profiler-chart-cpu')).not.toBeInTheDocument();
+  });
+
+  it('所有可见 Module 轨道都参与图表区高度分配', async () => {
+    renderView();
+    const cpu = screen.getByTestId('profiler-chart-cpu');
+    expect(cpu).toHaveClass('profiler-chart--fill');
+    expect(cpu).toHaveClass('profiler-chart--cpu');
+    expect(screen.getByTestId('profiler-chart-gpu')).toHaveClass('profiler-chart--fill');
+
+    await userEvent.click(screen.getByLabelText('GPU Usage'));
+    await userEvent.click(screen.getByLabelText('Rendering'));
+    await userEvent.click(screen.getByLabelText('Memory'));
+    expect(cpu).toHaveClass('profiler-chart--fill');
   });
 
   it('帧前进后退与 Current', async () => {
@@ -216,6 +232,50 @@ describe('ProfilerView 时间轴视口', () => {
     const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
     fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
     expect(viewport()).toHaveAttribute('data-visible', '300');
+  });
+
+  it('CPU Y 轴默认 100ms，可用鼠标滚轮缩放并双击恢复默认值', () => {
+    const spike = emptyFrame({
+      frameIndex: 500,
+      cpuTimeMs: 160,
+      cpuScriptsMs: 120,
+      cpuRenderingMs: 20,
+      cpuPhysicsMs: 20,
+    });
+    renderView({ frames: [frameAt(0), spike] });
+    const chart = screen.getByTestId('profiler-chart-cpu');
+    const axis = screen.getByRole('slider', { name: '调整 CPU Usage 纵轴上限' });
+    const defaultMax = Number(chart.getAttribute('data-y-max'));
+    expect(defaultMax).toBe(100);
+    expect(axis).toHaveAttribute('aria-valuemin', '0.01');
+
+    fireEvent.wheel(axis, { deltaY: -100 });
+    const manualMax = Number(chart.getAttribute('data-y-max'));
+    expect(manualMax).toBeLessThan(defaultMax);
+    expect(chart).toHaveAttribute('data-overflow-count', '1');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    fireEvent.doubleClick(axis);
+    expect(Number(chart.getAttribute('data-y-max'))).toBe(defaultMax);
+    expect(chart).toHaveAttribute('data-overflow-count', '1');
+  });
+
+  it('GPU Usage 与 Rendering 超过 100 时标记溢出而不扩展纵轴', () => {
+    const spike = emptyFrame({ gpuTimeMs: 160, drawCalls: 160 });
+    renderView({ frames: [spike] });
+    expect(screen.getByTestId('profiler-chart-gpu')).toHaveAttribute('data-overflow-count', '1');
+    expect(screen.getByTestId('profiler-chart-rendering')).toHaveAttribute('data-overflow-count', '1');
+  });
+
+  it('GPU Usage 与 Rendering 也可独立调整纵轴并恢复 100', () => {
+    renderView();
+    for (const label of ['调整 GPU Usage 纵轴上限', '调整 Rendering 纵轴上限']) {
+      const axis = screen.getByRole('slider', { name: label });
+      fireEvent.wheel(axis, { deltaY: 100 });
+      expect(axis).not.toHaveAttribute('aria-valuenow', '100');
+      fireEvent.doubleClick(axis);
+      expect(axis).toHaveAttribute('aria-valuenow', '100');
+    }
   });
 
   it('滚动条平移会暂停跟随', () => {

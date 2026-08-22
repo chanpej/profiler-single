@@ -521,9 +521,21 @@ body {
   cursor: pointer;
 }
 .profiler-chart.is-active { outline: 1px solid rgba(56, 189, 248, 0.55); outline-offset: -1px; }
+.profiler-chart--fill {
+  flex: 1 1 92px;
+  min-height: 92px;
+  overflow: hidden;
+}
+.profiler-chart--cpu {
+  /* 标题、当前值和 8 个 CPU 分类项均可完整显示。 */
+  min-height: 176px;
+  flex-basis: 176px;
+}
 .profiler-chart--memory {
-  grid-template-columns: 220px 1fr;
+  /* 与所有其他 Module 共用相同头部列宽，保证图内数据区域从同一 X 坐标开始。 */
+  grid-template-columns: 200px 1fr;
   min-height: 170px;
+  flex-basis: 170px;
 }
 
 .profiler-chart-meta {
@@ -561,8 +573,19 @@ body {
 .profiler-legend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .profiler-legend-val { margin-left: auto; font-size: 10px; }
 
-.profiler-chart-canvas { min-width: 0; }
+.profiler-chart-canvas { min-width: 0; position: relative; overflow: hidden; }
 .profiler-chart-canvas canvas { display: block; width: 100%; }
+.profiler-y-axis-control {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.profiler-y-axis-control:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
 
 .profiler-detail {
   background: var(--bg-panel);

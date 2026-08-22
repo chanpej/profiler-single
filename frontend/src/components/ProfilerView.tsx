@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
-import { DEFAULT_ENABLED, PROFILER_MODULES } from '../lib/profiler';
+import { DEFAULT_CPU_CHART_MAX_Y, DEFAULT_ENABLED, PROFILER_MODULES } from '../lib/profiler';
 import { clampDetailHeight, loadDetailHeight, saveDetailHeight } from '../lib/detailHeight';
 import {
   DEFAULT_VISIBLE,
@@ -63,6 +63,11 @@ export function ProfilerView({
   const [picked, setPicked] = useState<FrameData | null>(null);
   const [hierarchy, setHierarchy] = useState<SampleNode[]>([]);
   const [detailH, setDetailH] = useState(loadDetailHeight);
+  const [yAxisMax, setYAxisMax] = useState<Partial<Record<ProfilerModuleId, number>>>({
+    cpu: DEFAULT_CPU_CHART_MAX_Y,
+    gpu: DEFAULT_CPU_CHART_MAX_Y,
+    rendering: DEFAULT_CPU_CHART_MAX_Y,
+  });
   const drag = useRef<{ startY: number; startH: number } | null>(null);
 
   const total = totalCount ?? frames?.length ?? 0;
@@ -227,6 +232,7 @@ export function ProfilerView({
   };
 
   const visibleMods = PROFILER_MODULES.filter((m) => enabled.includes(m.id));
+  const chartLayoutRevision = visibleMods.map((m) => m.id).join('|');
   const canScroll = total > windowed.visible;
   const viewEnd = total === 0 ? 0 : Math.min(total - 1, windowed.start + windowed.visible - 1);
 
@@ -289,6 +295,12 @@ export function ProfilerView({
             onSelectFrame={onSelectLocal}
             onActivate={() => setActive(m.id)}
             onWheel={onWheelChart}
+            yAxisMax={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering' ? yAxisMax[m.id] : undefined}
+            onYAxisMaxChange={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering'
+              ? (max) => setYAxisMax((current) => ({ ...current, [m.id]: max }))
+              : undefined}
+            layoutRevision={chartLayoutRevision}
+            fillAvailableHeight
           />
         ))}
       </div>

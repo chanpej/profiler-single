@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { emptyFrame } from './frame';
 import {
+  CPU_CHART_MAX_Y,
+  CPU_CHART_MIN_Y,
+  DEFAULT_CPU_CHART_MAX_Y,
+  formatChartAxisValue,
+  adjustCpuChartMax,
   chartMax,
   extractModuleSeries,
   memoryEditorSummary,
@@ -80,10 +85,42 @@ describe('chartMax', () => {
     const series = extractModuleSeries(moduleById('cpu'), frames);
     expect(chartMax(moduleById('cpu'), series)).toBeGreaterThanOrEqual(33.4);
   });
-  it('非堆叠模块取峰值', () => {
+  it('Rendering 固定使用 100 的纵轴上限', () => {
     const frames = [emptyFrame({ drawCalls: 100, batches: 80, setPassCalls: 20, shadowCasters: 5 })];
     const series = extractModuleSeries(moduleById('rendering'), frames);
-    expect(chartMax(moduleById('rendering'), series)).toBeCloseTo(100 * 1.15);
+    expect(chartMax(moduleById('rendering'), series)).toBe(100);
+  });
+  it('GPU Usage 与 Rendering 固定使用 100 作为纵轴上限', () => {
+    const gpu = extractModuleSeries(moduleById('gpu'), [emptyFrame({ gpuTimeMs: 12 })]);
+    const rendering = extractModuleSeries(moduleById('rendering'), [emptyFrame({ drawCalls: 20 })]);
+    expect(chartMax(moduleById('gpu'), gpu)).toBe(100);
+    expect(chartMax(moduleById('rendering'), rendering)).toBe(100);
+
+    const gpuSpike = extractModuleSeries(moduleById('gpu'), [emptyFrame({ gpuTimeMs: 160 })]);
+    const renderingSpike = extractModuleSeries(moduleById('rendering'), [emptyFrame({ drawCalls: 160 })]);
+    expect(chartMax(moduleById('gpu'), gpuSpike)).toBe(100);
+    expect(chartMax(moduleById('rendering'), renderingSpike)).toBe(100);
+  });
+});
+
+describe('adjustCpuChartMax', () => {
+  it('向下拖动扩大正向上限，向上拖动缩小，且不越过零', () => {
+    expect(adjustCpuChartMax(20, 100)).toBeGreaterThan(20);
+    expect(adjustCpuChartMax(20, -100)).toBeLessThan(20);
+    expect(adjustCpuChartMax(1, -10_000)).toBe(CPU_CHART_MIN_Y);
+    expect(adjustCpuChartMax(CPU_CHART_MAX_Y, 10_000)).toBe(CPU_CHART_MAX_Y);
+  });
+
+  it('默认上限为 100ms', () => {
+    expect(DEFAULT_CPU_CHART_MAX_Y).toBe(100);
+  });
+});
+
+describe('formatChartAxisValue', () => {
+  it('纵轴标签使用无单位的非负整数', () => {
+    expect(formatChartAxisValue(16.7)).toBe('17');
+    expect(formatChartAxisValue(327.71)).toBe('328');
+    expect(formatChartAxisValue(-5)).toBe('0');
   });
 });
 
