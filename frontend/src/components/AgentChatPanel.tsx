@@ -6,10 +6,11 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  unstable_useComposerInput,
   useLocalRuntime,
   type TextMessagePartProps,
 } from '@assistant-ui/react';
-import { ArrowUp, Bot, Download, LoaderCircle, PanelRightClose, PanelRightOpen, Wrench } from 'lucide-react';
+import { ArrowUp, Bot, Box, Download, Layers, LoaderCircle, PanelRightClose, PanelRightOpen, Wrench } from 'lucide-react';
 import '../styles/agentChat.css';
 import { createAgentChatAdapter, type AgentChatTurnRecord } from '../lib/agentChatAdapter';
 import { parseAgentChatContent } from '../lib/agentChatContent';
@@ -17,22 +18,33 @@ import { agentChatExportFilename, formatAgentChatSession } from '../lib/agentCha
 import { COLLAPSED_AGENT_WIDTH, saveAgentWidth, widthFromDrag } from '../lib/agentPanel';
 import { activeAgent, isAgentConfigured } from '../lib/llmConfig';
 import { contextMenuFromEvent, type ChatContextMenuState } from '../lib/agentChatUi';
+import { formatAgentChatReference, type AgentChatReference } from '../lib/agentChatReferences';
 import type { ModelOption } from '../lib/agentRuntime';
 import type { AgentProfile, LLMConfig } from '../types';
 import { ChatContextMenu } from './ChatContextMenu';
 import { ComposerToolbar } from './ComposerToolbar';
 
 function UserMessageText({ text }: TextMessagePartProps) {
-  return <div className="agent-chat-message-text">{text}</div>;
+  const segments = useMemo(() => parseAgentChatContent(text), [text]);
+  return <MessageContent segments={segments} />;
 }
 
 function AssistantMessageText({ text }: TextMessagePartProps) {
   const segments = useMemo(() => parseAgentChatContent(text), [text]);
+  return <MessageContent segments={segments} />;
+}
+
+function MessageContent({ segments }: { segments: ReturnType<typeof parseAgentChatContent> }) {
   return (
     <div className="agent-chat-message-text">
       {segments.map((segment, index) => (
         segment.type === 'text' ? (
-          <div className="agent-chat-text-segment" key={`text-${index}`}>{segment.text}</div>
+          <span className="agent-chat-text-segment" key={`text-${index}`}>{segment.text}</span>
+        ) : segment.type === 'reference' ? (
+          <span className={`agent-chat-reference agent-chat-reference-${segment.kind} agent-chat-reference-${segment.referenceType}`} key={`reference-${index}`} title={segment.description}>
+            {segment.kind === 'module' ? <Box size={13} aria-hidden /> : <Layers size={13} aria-hidden />}
+            <strong>{segment.label}</strong>
+          </span>
         ) : (
           <details className="agent-chat-tool-group" key={`tool-${index}`}>
             <summary>
@@ -65,6 +77,7 @@ interface Props {
   agentChatSend: (message: string) => Promise<string>;
   onChunk: (handler: (text: string) => void) => () => void;
   exportSession?: (filename: string, content: string) => Promise<void>;
+  pendingReference?: { id: number; reference: AgentChatReference } | null;
 }
 
 const AgentMessage = memo(function AgentMessage({ role }: { role: 'user' | 'assistant' }) {
@@ -90,12 +103,14 @@ function AgentChatThread({
   onChunk,
   onTurnUpdate,
   toolbar,
+  pendingReference,
 }: {
   agentName: string;
   agentChatSend: Props['agentChatSend'];
   onChunk: Props['onChunk'];
   onTurnUpdate: (turn: AgentChatTurnRecord) => void;
   toolbar: React.ReactNode;
+  pendingReference?: { id: number; reference: AgentChatReference } | null;
 }) {
   const adapter = useMemo(
     () => createAgentChatAdapter({ send: agentChatSend, onChunk, onTurnUpdate }),
@@ -128,15 +143,7 @@ function AgentChatThread({
         </ThreadPrimitive.Viewport>
         <div className="agent-chat-footer">
           <ComposerPrimitive.Root className="agent-composer">
-            <ComposerPrimitive.Input
-              className="agent-composer-input"
-              aria-label="询问性能问题…"
-              placeholder="询问性能问题…"
-              submitMode="enter"
-            />
-            <ComposerPrimitive.Send className="agent-composer-send" aria-label="发送" title="发送">
-              <ArrowUp size={16} aria-hidden />
-            </ComposerPrimitive.Send>
+            <AgentComposer pendingReference={pendingReference} />
           </ComposerPrimitive.Root>
           {toolbar}
         </div>
@@ -145,9 +152,137 @@ function AgentChatThread({
   );
 }
 
+function AgentComposer({ pendingReference }: { pendingReference?: { id: number; reference: AgentChatReference } | null }) {
+  const { setText, send, isDisabled } = unstable_useComposerInput();
+  const editorRef = useRef<HTMLDivElement>(null);
+  const referenceIDs = useRef(new Map<string, AgentChatReference>());
+  const nextReferenceID = useRef(0);
+  const lastRange = useRef<Range | null>(null);
+
+  const rememberRange = useCallback(() => {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !editorRef.current) return;
+    const range = selection.getRangeAt(0);
+    if (editorRef.current.contains(range.commonAncestorContainer)) lastRange.current = range.cloneRange();
+  }, []);
+
+  const serialized = useCallback(() => {
+    const read = (nodes: NodeListOf<ChildNode> | ChildNode[]): string => Array.from(nodes).map((node) => {
+      if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+      const element = node as HTMLElement;
+      if (element.dataset.referenceId) return formatAgentChatReference(referenceIDs.current.get(element.dataset.referenceId) ?? { kind: 'module', type: 'unknown', label: 'Unknown', description: '' });
+      if (element.tagName === 'BR') return '\n';
+      return read(element.childNodes);
+    }).join('');
+    return editorRef.current ? read(editorRef.current.childNodes) : '';
+  }, []);
+
+  const sync = useCallback(() => setText(serialized()), [serialized, setText]);
+
+  const placeAfter = useCallback((node: Node) => {
+    const range = document.createRange();
+    range.setStartAfter(node);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    lastRange.current = range.cloneRange();
+  }, []);
+
+  const insertReference = useCallback((reference: AgentChatReference) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const id = `reference-${nextReferenceID.current++}`;
+    referenceIDs.current.set(id, reference);
+    const token = document.createElement('span');
+    token.className = `agent-composer-reference agent-composer-reference-${reference.kind} agent-composer-reference-${reference.type}`;
+    token.contentEditable = 'false';
+    token.dataset.referenceId = id;
+    token.title = reference.description;
+    token.innerHTML = `${reference.kind === 'module' ? '▣' : '▤'} <span>${reference.label}</span><button type="button" aria-label="移除 ${reference.label} 引用" title="移除引用">×</button>`;
+    const selection = window.getSelection();
+    const range = selection?.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+      ? selection.getRangeAt(0) : lastRange.current;
+    if (range && editor.contains(range.commonAncestorContainer)) {
+      range.deleteContents();
+      range.insertNode(token);
+    } else {
+      editor.append(token);
+    }
+    placeAfter(token);
+    editor.focus();
+    sync();
+  }, [placeAfter, sync]);
+
+  useEffect(() => {
+    if (!pendingReference) return;
+    insertReference(pendingReference.reference);
+  }, [insertReference, pendingReference?.id]);
+
+  const submit = useCallback(() => {
+    const message = serialized();
+    if (!message.trim() || isDisabled) return;
+    // setText 在 assistant-ui 中同 tick 同步，因此当前点击会发送包含引用的完整原文。
+    setText(message);
+    send();
+    if (editorRef.current) editorRef.current.replaceChildren();
+    referenceIDs.current.clear();
+    lastRange.current = null;
+    setText('');
+  }, [isDisabled, send, serialized, setText]);
+
+  return (
+    <div className="agent-composer-rich">
+      <div
+        ref={editorRef}
+        className="agent-composer-draft"
+        contentEditable={!isDisabled}
+        role="textbox"
+        aria-multiline="true"
+        aria-label="询问性能问题…"
+        data-placeholder="询问性能问题…"
+        onFocus={rememberRange}
+        onKeyUp={rememberRange}
+        onMouseUp={rememberRange}
+        onInput={() => { rememberRange(); sync(); }}
+        onClick={(event) => {
+          const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[aria-label^="移除 "]');
+          if (!button) return;
+          const token = button.closest<HTMLElement>('[data-reference-id]');
+          if (!token) return;
+          referenceIDs.current.delete(token.dataset.referenceId ?? '');
+          placeAfter(token);
+          token.remove();
+          sync();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            submit();
+          } else if (event.key === 'Enter') {
+            event.preventDefault();
+            const lineBreak = document.createElement('br');
+            const selection = window.getSelection();
+            const range = selection?.rangeCount ? selection.getRangeAt(0) : lastRange.current;
+            if (range && editorRef.current?.contains(range.commonAncestorContainer)) {
+              range.insertNode(lineBreak);
+              placeAfter(lineBreak);
+              sync();
+            }
+          }
+        }}
+      />
+      <button type="button" className="agent-composer-send" aria-label="发送" title="发送" disabled={isDisabled} onClick={submit}>
+        <ArrowUp size={16} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 /** 右侧 ACP Agent 聊天面板：assistant-ui 会话 UI，可拖拽宽度、可收起。 */
 export function AgentChatPanel({
-  llm, collapsed, width, onToggle, onWidthChange, onSelectAgent, onUpdateAgent, listModels, agentChatSend, onChunk, exportSession,
+  llm, collapsed, width, onToggle, onWidthChange, onSelectAgent, onUpdateAgent, listModels, agentChatSend, onChunk, exportSession, pendingReference,
 }: Props) {
   const drag = useRef<{ startX: number; startW: number } | null>(null);
   const widthRef = useRef(width);
@@ -304,6 +439,7 @@ export function AgentChatPanel({
             onChunk={onChunk}
             onTurnUpdate={onTurnUpdate}
             toolbar={toolbar}
+            pendingReference={pendingReference}
           />
         ) : (
           <p className="dim agent-chat-hint">请先在设置中配置 ACP Agent。</p>

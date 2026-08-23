@@ -39,4 +39,20 @@ describe('parseAgentChatContent', () => {
       { type: 'tool', entries: ['【MCP 工具】读取当前帧'] },
     ]);
   });
+
+  it('recognizes module and frame references as independent inline segments', () => {
+    expect(parseAgentChatContent('请分析。\n【性能引用|module|memory|Memory】优先调用 performance_memory_analysis。\n【性能引用|frame|frame|Frame 42】MCP 索引为 7。')).toEqual([
+      { type: 'text', text: '请分析。' },
+      { type: 'reference', kind: 'module', referenceType: 'memory', label: 'Memory', description: '优先调用 performance_memory_analysis。' },
+      { type: 'reference', kind: 'frame', referenceType: 'frame', label: 'Frame 42', description: 'MCP 索引为 7。' },
+    ]);
+  });
+
+  it('recognizes a closed reference embedded between ordinary text', () => {
+    expect(parseAgentChatContent('请检查【性能引用|module|memory|Memory · Frame 8】MCP 索引为 7。【/性能引用】的峰值。')).toEqual([
+      { type: 'text', text: '请检查' },
+      { type: 'reference', kind: 'module', referenceType: 'memory', label: 'Memory · Frame 8', description: 'MCP 索引为 7。' },
+      { type: 'text', text: '的峰值。' },
+    ]);
+  });
 });

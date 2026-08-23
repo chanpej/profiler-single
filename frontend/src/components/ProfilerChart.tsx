@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { Bot } from 'lucide-react';
 import type { FrameData } from '../types';
 import { adjustCpuChartMax, chartMax, DEFAULT_CPU_CHART_MAX_Y, extractModuleSeries, formatChartAxisValue, memoryMetricAvailable, type ModuleDef } from '../lib/profiler';
 import { formatProfilerValue } from '../lib/format';
@@ -11,6 +12,8 @@ interface Props {
   height?: number;
   onSelectFrame: (index: number) => void;
   onActivate: () => void;
+  /** 仅激活模块的左侧信息区显示此入口。 */
+  onInsertReference?: () => void;
   onWheel?: (e: React.WheelEvent<HTMLElement>) => void;
   /** 可调纵轴的手动上限；缺省时使用 100。 */
   yAxisMax?: number;
@@ -54,7 +57,7 @@ function memoryMetricForSeries(id: string): MemoryMetricId | null {
  * 点击或拖拽图表选帧，点击整行激活该模块的详情面板。
  */
 export function ProfilerChart({
-  module, frames, selectedIndex, active, height, onSelectFrame, onActivate, onWheel,
+  module, frames, selectedIndex, active, height, onSelectFrame, onActivate, onInsertReference, onWheel,
   yAxisMax, onYAxisMaxChange, layoutRevision, fillAvailableHeight = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -286,7 +289,23 @@ export function ProfilerChart({
       onClick={onActivate}
     >
       <div className="profiler-chart-meta">
-        <div className="profiler-chart-title">{module.label}</div>
+        <div className="profiler-chart-title-row">
+          <div className="profiler-chart-title">{module.label}</div>
+          {active && onInsertReference && (
+            <button
+              type="button"
+              className="btn ghost profiler-chart-reference"
+              aria-label={`插入 ${module.label} 到 Agent Chat`}
+              title={`插入 ${module.label} 引用到 Agent Chat`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onInsertReference();
+              }}
+            >
+              <Bot size={13} aria-hidden />
+            </button>
+          )}
+        </div>
         <div className="profiler-chart-headline mono">
           {headline ? formatProfilerValue(headline.value, headline.unit) : '--'}
         </div>

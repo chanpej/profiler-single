@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
 import { DEFAULT_CPU_CHART_MAX_Y, DEFAULT_ENABLED, PROFILER_MODULES } from '../lib/profiler';
+import { createFrameReference, createModuleReference, type AgentChatReference } from '../lib/agentChatReferences';
 import { clampDetailHeight, loadDetailHeight, saveDetailHeight } from '../lib/detailHeight';
 import {
   DEFAULT_VISIBLE,
@@ -41,6 +42,7 @@ interface Props {
   onImport: () => void;
   onDeepProfiling?: (on: boolean) => void;
   onCallStacks?: (on: boolean) => void;
+  onInsertReference?: (reference: AgentChatReference) => void;
 }
 
 const initialVp: Viewport = {
@@ -54,7 +56,7 @@ const initialVp: Viewport = {
 export function ProfilerView({
   frames, totalCount, fetchRange, getFrame, getHierarchy, recording, connected,
   deepProfiling = false, callStacks = false,
-  onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks,
+  onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks, onInsertReference,
 }: Props) {
   const [enabled, setEnabled] = useState<ProfilerModuleId[]>(DEFAULT_ENABLED);
   const [active, setActive] = useState<ProfilerModuleId>('cpu');
@@ -257,6 +259,7 @@ export function ProfilerView({
         callStacks={callStacks}
         onDeepProfiling={onDeepProfiling}
         onCallStacks={onCallStacks}
+        onInsertFrameReference={total > 0 && windowed.selected >= 0 ? () => onInsertReference?.(createFrameReference(windowed.selected, picked)) : undefined}
       />
       <div
         className="sr-only"
@@ -268,7 +271,7 @@ export function ProfilerView({
       />
       <div className="profiler-modules" role="group" aria-label="Profiler 模块">
         {PROFILER_MODULES.map((m) => (
-          <label key={m.id} className={`profiler-mod ${enabled.includes(m.id) ? 'is-on' : ''}`}>
+          <label key={m.id} className={`profiler-mod ${enabled.includes(m.id) ? 'is-on' : ''}`} data-testid={`profiler-module-${m.id}`}>
             <input
               type="checkbox"
               checked={enabled.includes(m.id)}
@@ -294,6 +297,7 @@ export function ProfilerView({
             active={active === m.id}
             onSelectFrame={onSelectLocal}
             onActivate={() => setActive(m.id)}
+            onInsertReference={() => onInsertReference?.(createModuleReference(m.id, windowed.selected))}
             onWheel={onWheelChart}
             yAxisMax={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering' ? yAxisMax[m.id] : undefined}
             onYAxisMaxChange={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering'

@@ -101,6 +101,55 @@ func TestMCPToolsReadCurrentSession(t *testing.T) {
 	}
 }
 
+func TestMCPMemoryAndModuleAnalysis(t *testing.T) {
+	svc := newTestService()
+	svc.onFrame(profileframe.New(protocol.FrameData{
+		FrameIndex: 10, TimestampMs: 1_000, UsedMemMB: 100, CommittedMemMB: 120, GCUsedMB: 20,
+		TextureMemMB: 30, ObjectCount: 40, GCAllocatedFrameKB: 2,
+		MemoryCounterMask: protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted | protocol.MemoryCounterGCUsed | protocol.MemoryCounterTexture | protocol.MemoryCounterObjectCount | protocol.MemoryCounterGCAllocatedFrame,
+	}, nil))
+	svc.onFrame(profileframe.New(protocol.FrameData{
+		FrameIndex: 11, TimestampMs: 2_000, UsedMemMB: 115, CommittedMemMB: 130, GCUsedMB: 22,
+		TextureMemMB: 36, ObjectCount: 45, GCAllocatedFrameKB: 8,
+		MemoryCounterMask: protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted | protocol.MemoryCounterGCUsed | protocol.MemoryCounterTexture | protocol.MemoryCounterObjectCount | protocol.MemoryCounterGCAllocatedFrame,
+	}, nil))
+
+	value, err := svc.mcp.execute("performance_memory_analysis", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := value.(map[string]any)
+	if memory["frameCount"] != 2 || memory["trend"].(map[string]any)["usedMemDeltaMB"] != 15.0 {
+		t.Fatalf("memory analysis = %#v", memory)
+	}
+	metrics := memory["metrics"].(map[string]mcpMetric)
+	if metrics["usedMemMB"].Max != 115 || metrics["gcAllocatedFrameKB"].PeakFrame != 11 {
+		t.Fatalf("memory metrics = %#v", metrics)
+	}
+
+	module, err := svc.mcp.execute("performance_module_analysis", json.RawMessage(`{"module":"memory"}`))
+	if err != nil || module.(map[string]any)["frameCount"] != 2 {
+		t.Fatalf("module analysis = %#v, err = %v", module, err)
+	}
+	if _, err := svc.mcp.execute("performance_module_analysis", json.RawMessage(`{"module":"unknown"}`)); err == nil {
+		t.Fatal("expected unknown module error")
+	}
+}
+
+func TestMCPFrameCompare(t *testing.T) {
+	svc := newTestService()
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 1, CPUTimeMs: 10, DrawCalls: 20}, nil))
+	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 2, CPUTimeMs: 16, DrawCalls: 25}, nil))
+	value, err := svc.mcp.execute("performance_frame_compare", json.RawMessage(`{"baselineIndex":0,"comparisonIndex":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := value.(map[string]any)["delta"].(map[string]float64)
+	if delta["cpuTimeMs"] != 6 || delta["drawCalls"] != 5 {
+		t.Fatalf("delta = %#v", delta)
+	}
+}
+
 func TestAgentLogsKeepRecentEntries(t *testing.T) {
 	svc := newTestService()
 	for i := 0; i < agentLogCapacity+1; i++ {

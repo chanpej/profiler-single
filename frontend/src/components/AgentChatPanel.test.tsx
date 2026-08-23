@@ -6,7 +6,7 @@ import type { ChatModelAdapter } from '@assistant-ui/react';
 import { AgentChatPanel } from './AgentChatPanel';
 import { emptyLLMConfig, withActiveAgent } from '../lib/llmConfig';
 
-const assistantUiMock = vi.hoisted(() => ({ adapter: null as ChatModelAdapter | null }));
+const assistantUiMock = vi.hoisted(() => ({ adapter: null as ChatModelAdapter | null, setText: vi.fn(), send: vi.fn() }));
 
 vi.mock('@assistant-ui/react', () => {
   const Wrap = ({ children, autoScroll: _autoScroll, ...props }: HTMLAttributes<HTMLDivElement> & { autoScroll?: boolean }) => <div {...props}>{children}</div>;
@@ -17,6 +17,7 @@ vi.mock('@assistant-ui/react', () => {
       assistantUiMock.adapter = adapter;
       return {};
     },
+    unstable_useComposerInput: () => ({ value: '', setText: assistantUiMock.setText, send: assistantUiMock.send, isDisabled: false }),
     ThreadPrimitive: {
       Root: Wrap,
       Viewport: Wrap,
@@ -158,5 +159,20 @@ describe('AgentChatPanel', () => {
     expect(screen.getByRole('menuitem', { name: '复制' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '复制消息' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '全选' })).toBeInTheDocument();
+  });
+
+  it('待插入引用在输入框中显示为可移除的行内标签，并向 Agent 写入原始引用', async () => {
+    renderPanel({
+      pendingReference: {
+        id: 1,
+        reference: { kind: 'module', type: 'memory', label: 'Memory', description: '优先调用 performance_memory_analysis。' },
+      },
+    });
+    expect(assistantUiMock.setText).toHaveBeenCalledWith(expect.stringContaining('【性能引用|module|memory|Memory】'));
+    expect(screen.getByText('Memory')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '移除 Memory 引用' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: '询问性能问题…' })).toHaveAttribute('contenteditable', 'true');
+    await userEvent.click(screen.getByRole('button', { name: '移除 Memory 引用' }));
+    expect(assistantUiMock.setText).toHaveBeenLastCalledWith('');
   });
 });

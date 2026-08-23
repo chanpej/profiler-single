@@ -89,6 +89,26 @@ describe('ProfilerView', () => {
     expect(screen.queryByTestId('profiler-chart-cpu')).not.toBeInTheDocument();
   });
 
+  it('模块标签不再支持拖拽到 Agent Chat', () => {
+    renderView();
+    const memory = screen.getByTestId('profiler-module-memory');
+    expect(memory).not.toHaveAttribute('draggable', 'true');
+  });
+
+  it('只在选中模块的左侧信息区显示插入 Agent Chat 图标', async () => {
+    const onInsertReference = vi.fn();
+    renderView({ onInsertReference });
+    expect(screen.getByRole('button', { name: '插入 CPU Usage 到 Agent Chat' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '插入 Memory 到 Agent Chat' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '插入 CPU Usage 到 Agent Chat' }));
+    expect(onInsertReference).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'module', type: 'cpu', description: expect.stringContaining('MCP 索引为 2'),
+    }));
+    await userEvent.click(screen.getByTestId('profiler-chart-memory'));
+    expect(screen.getByRole('button', { name: '插入 Memory 到 Agent Chat' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '插入 CPU Usage 到 Agent Chat' })).not.toBeInTheDocument();
+  });
+
   it('所有可见 Module 轨道都参与图表区高度分配', async () => {
     renderView();
     const cpu = screen.getByTestId('profiler-chart-cpu');

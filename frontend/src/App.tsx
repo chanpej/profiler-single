@@ -10,6 +10,7 @@ import { applyChatFontSize, loadChatFontSize } from './lib/chatAppearance';
 import { emptyLLMConfig, isAgentConfigured, normalizeLLMConfig, updateAgent, withActiveAgent } from './lib/llmConfig';
 import { applyLLMRuntime, loadLLMRuntime, saveLLMRuntime } from './lib/llmRuntimeStorage';
 import { chooseAgentChatExportPath } from './lib/agentChatExport';
+import type { AgentChatReference } from './lib/agentChatReferences';
 import { initialImportProgress } from './lib/importProgress';
 import type { AgentProfile, ImportProgressEvent, LLMConfig, OverlayId, Stats, Status } from './types';
 import { TitleBar } from './components/TitleBar';
@@ -60,6 +61,8 @@ function App() {
   const [llm, setLlm] = useState<LLMConfig>(() => applyLLMRuntime(emptyLLMConfig, loadLLMRuntime()));
   const [agentCollapsed, setAgentCollapsed] = useState(loadAgentCollapsed);
   const [agentWidth, setAgentWidth] = useState(loadAgentWidth);
+  const [pendingChatReference, setPendingChatReference] = useState<{ id: number; reference: AgentChatReference } | null>(null);
+  const referenceSequence = useRef(0);
   const lastRefresh = useRef(0);
   const statusRef = useRef(status);
   const shownLastError = useRef('');
@@ -204,6 +207,11 @@ function App() {
       if (!isUserCancelled(e)) setError(formatErrorMessage(e));
     }
   }, []);
+  const onInsertChatReference = useCallback((reference: AgentChatReference) => {
+    referenceSequence.current += 1;
+    setPendingChatReference({ id: referenceSequence.current, reference });
+    setAgentCollapsed(false);
+  }, []);
 
   const llmReady = isAgentConfigured(llm);
 
@@ -249,6 +257,7 @@ function App() {
             onImport={onImport}
             onDeepProfiling={onDeepProfiling}
             onCallStacks={onCallStacks}
+            onInsertReference={onInsertChatReference}
           />
         </div>
         <AgentChatPanel
@@ -263,6 +272,7 @@ function App() {
           agentChatSend={api.agentChatSend}
           onChunk={api.onAgentChunk}
           exportSession={onExportAgentChat}
+          pendingReference={pendingChatReference}
         />
       </div>
       <StatusBar status={status} busy={busy} agentName={llmReady ? (llm.agents.find((a) => a.id === llm.activeId)?.name ?? '') : ''} />

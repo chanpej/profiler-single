@@ -65,8 +65,31 @@
 .agent-chat-message-user { margin-left: auto; background: var(--bg-hover); }
 .agent-chat-message-assistant { margin-right: auto; background: var(--bg-panel); }
 .agent-chat-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-chat-text-segment + .agent-chat-text-segment { margin-top: 6px; }
+.agent-chat-text-segment { white-space: pre-wrap; }
 .agent-chat-error { display: block; margin-top: 6px; color: #f87171; }
+
+.agent-chat-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 2px;
+  padding: 1px 5px;
+  border: 1px solid var(--reference-color, rgba(56, 189, 248, 0.45));
+  border-left: 2px solid var(--reference-color, var(--accent));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--reference-color, var(--accent)) 10%, transparent);
+  white-space: normal;
+  vertical-align: baseline;
+  line-height: 1.35;
+}
+.agent-chat-reference-module { --reference-color: #a78bfa; }
+.agent-chat-reference-module.agent-chat-reference-memory { --reference-color: #e8a838; }
+.agent-chat-reference-module.agent-chat-reference-cpu { --reference-color: #3b6cb5; }
+.agent-chat-reference-module.agent-chat-reference-gpu { --reference-color: #2e8b4a; }
+.agent-chat-reference-module.agent-chat-reference-rendering,
+.agent-chat-reference-module.agent-chat-reference-ui { --reference-color: #c9a227; }
+.agent-chat-reference-frame { --reference-color: #38bdf8; }
+.agent-chat-reference strong { min-width: 0; color: var(--text); font-size: inherit; font-weight: 600; }
 
 .agent-chat-tool-group {
   margin: 5px 0;
@@ -120,21 +143,43 @@
 @keyframes agent-chat-spin { to { transform: rotate(360deg); } }
 
 .agent-composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
   padding: 6px 8px 2px;
 }
 
-.agent-composer-input {
+.agent-composer-rich {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.agent-composer-draft {
   min-width: 0;
   flex: 1;
+  box-sizing: border-box;
+  min-height: 32px;
+  max-height: 92px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  overflow-y: auto;
+  white-space: pre-wrap;
+  line-height: 22px;
+  outline: none;
+}
+
+.agent-composer-draft:focus,
+.agent-composer-draft:focus-within { border-color: var(--accent); }
+.agent-composer-draft:empty::before { content: attr(data-placeholder); color: var(--text-dim); pointer-events: none; }
+
+.agent-composer-input {
+  min-width: 96px;
+  flex: 1 1 120px;
   min-height: 28px;
   max-height: 72px;
   resize: none;
   box-sizing: border-box;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
+  padding: 3px 2px;
+  border: 0;
   border-radius: 0;
   outline: none;
   background: var(--bg);
@@ -142,8 +187,47 @@
   font: inherit;
 }
 
-.agent-composer-input:focus { border-color: var(--accent); }
 .agent-composer-input::placeholder { color: var(--text-dim); }
+
+.agent-composer-reference {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 2px;
+  padding: 1px 3px 1px 5px;
+  border: 1px solid var(--reference-color, var(--accent));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--reference-color, var(--accent)) 16%, var(--bg));
+  color: var(--reference-color, var(--accent));
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: baseline;
+}
+.agent-composer-reference-module { --reference-color: #a78bfa; }
+.agent-composer-reference-module.agent-composer-reference-memory { --reference-color: #e8a838; }
+.agent-composer-reference-module.agent-composer-reference-cpu { --reference-color: #3b6cb5; }
+.agent-composer-reference-module.agent-composer-reference-gpu { --reference-color: #2e8b4a; }
+.agent-composer-reference-module.agent-composer-reference-rendering,
+.agent-composer-reference-module.agent-composer-reference-ui { --reference-color: #c9a227; }
+.agent-composer-reference-frame { --reference-color: #38bdf8; }
+.agent-composer-reference span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
+.agent-composer-reference button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.agent-composer-reference button:hover { color: var(--text); background: rgba(255, 255, 255, 0.12); }
 
 .agent-composer-send {
   display: inline-flex;
