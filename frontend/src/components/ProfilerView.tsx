@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
+import type { CpuTimelineFrame, FrameData, FrameRange, HeavyProfile, ProfilerModuleId, SampleNode } from '../types';
 import { DEFAULT_CPU_CHART_MAX_Y, DEFAULT_ENABLED, PROFILER_MODULES } from '../lib/profiler';
-import { createFrameReference, createModuleReference, type AgentChatReference } from '../lib/agentChatReferences';
 import { clampDetailHeight, loadDetailHeight, saveDetailHeight } from '../lib/detailHeight';
 import {
   DEFAULT_VISIBLE,
@@ -21,8 +20,9 @@ import {
   type Viewport,
 } from '../lib/viewport';
 import { ProfilerToolbar } from './ProfilerToolbar';
+import { ScreenFilmstrip, type ScreenFilmstripData } from './ScreenFilmstrip';
 import { ProfilerChart } from './ProfilerChart';
-import { ProfilerDetail } from './ProfilerDetail';
+import { ProfilerDetail, type CpuTab } from './ProfilerDetail';
 
 interface Props {
   /** 全量帧（测试或小数据）；与 fetchRange 二选一。 */
@@ -31,6 +31,10 @@ interface Props {
   fetchRange?: (offset: number, limit: number) => Promise<FrameData[]>;
   getFrame?: (index: number) => Promise<FrameData>;
   getHierarchy?: (index: number) => Promise<SampleNode[]>;
+  getTimeline?: (index: number, frameIndex: number) => Promise<CpuTimelineFrame[]>;
+  getHeavyProfile?: (start: number, end: number) => Promise<HeavyProfile>;
+  getScreenshots?: (offset: number, count: number, selected: number) => Promise<ScreenFilmstripData>;
+  setScreenCapture?: (enabled: boolean) => Promise<void>;
   recording: boolean;
   connected: boolean;
   deepProfiling?: boolean;
@@ -42,7 +46,6 @@ interface Props {
   onImport: () => void;
   onDeepProfiling?: (on: boolean) => void;
   onCallStacks?: (on: boolean) => void;
-  onInsertReference?: (reference: AgentChatReference) => void;
 }
 
 const initialVp: Viewport = {
@@ -54,34 +57,40 @@ const initialVp: Viewport = {
 
 /** Unity Profiler 2022 主视图：实时滚动 / 暂停视野 / 滚轮缩放。 */
 export function ProfilerView({
-  frames, totalCount, fetchRange, getFrame, getHierarchy, recording, connected,
+  frames, totalCount, fetchRange, getFrame, getHierarchy, getTimeline, getHeavyProfile, recording, connected,
+  getScreenshots, setScreenCapture,
   deepProfiling = false, callStacks = false,
-  onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks, onInsertReference,
+  onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks,
 }: Props) {
   const [enabled, setEnabled] = useState<ProfilerModuleId[]>(DEFAULT_ENABLED);
   const [active, setActive] = useState<ProfilerModuleId>('cpu');
   const [vp, setVp] = useState<Viewport>(initialVp);
   const [slice, setSlice] = useState<FrameData[]>([]);
-  const [picked, setPicked] = useState<FrameData | null>(null);
+  const sliceStart = useRef(0);
+  const [pickedFrame, setPickedFrame] = useState<{ index: number; frame: FrameData } | null>(null);
   const [hierarchy, setHierarchy] = useState<SampleNode[]>([]);
+  const [heavyRange, setHeavyRange] = useState<FrameRange | null>(null);
+  const [cpuTab, setCpuTab] = useState<CpuTab>('hierarchy');
   const [detailH, setDetailH] = useState(loadDetailHeight);
   const [yAxisMax, setYAxisMax] = useState<Partial<Record<ProfilerModuleId, number>>>({
-    cpu: DEFAULT_CPU_CHART_MAX_Y,
     gpu: DEFAULT_CPU_CHART_MAX_Y,
     rendering: DEFAULT_CPU_CHART_MAX_Y,
   });
   const drag = useRef<{ startY: number; startH: number } | null>(null);
 
   const total = totalCount ?? frames?.length ?? 0;
+  const validHeavyRange = heavyRange && heavyRange.end < total ? heavyRange : null;
   const windowed = useMemo(() => clampViewport(vp, total), [vp, total]);
   const localSelected = selectedInWindow(windowed);
+  const picked = frames?.[windowed.selected] ?? (pickedFrame?.index === windowed.selected ? pickedFrame.frame : null);
 
   useEffect(() => {
-    setVp((cur) => clampViewport(cur, total));
+    setVp((cur) => ({ ...clampViewport(cur, total), visible: cur.visible }));
   }, [total]);
 
   useEffect(() => {
     if (frames) {
+      sliceStart.current = windowed.start;
       setSlice(frames.slice(windowed.start, windowed.start + windowed.visible));
       return;
     }
@@ -91,7 +100,10 @@ export function ProfilerView({
     }
     let live = true;
     fetchRange(windowed.start, windowed.visible).then((rows) => {
-      if (live) setSlice(rows ?? []);
+      if (live) {
+        sliceStart.current = windowed.start;
+        setSlice(rows ?? []);
+      }
     }).catch(() => {
       if (live) setSlice([]);
     });
@@ -102,31 +114,27 @@ export function ProfilerView({
 
   useEffect(() => {
     if (total === 0 || windowed.selected < 0) {
-      setPicked(null);
+      setPickedFrame(null);
       return;
     }
     if (frames) {
-      setPicked(frames[windowed.selected] ?? null);
-      return;
-    }
-    if (localSelected >= 0 && slice[localSelected]) {
-      setPicked(slice[localSelected]);
       return;
     }
     if (!getFrame) {
-      setPicked(null);
+      const frame = sliceStart.current === windowed.start ? slice[localSelected] : undefined;
+      setPickedFrame(frame ? { index: windowed.selected, frame } : null);
       return;
     }
     let live = true;
     getFrame(windowed.selected).then((f) => {
-      if (live) setPicked(f);
+      if (live) setPickedFrame(f ? { index: windowed.selected, frame: f } : null);
     }).catch(() => {
-      if (live) setPicked(null);
+      if (live) setPickedFrame(null);
     });
     return () => {
       live = false;
     };
-  }, [frames, getFrame, localSelected, slice, total, windowed.selected]);
+  }, [frames, getFrame, localSelected, slice, total, windowed.selected, windowed.start]);
 
   useEffect(() => {
     if (total === 0 || windowed.selected < 0) {
@@ -178,8 +186,11 @@ export function ProfilerView({
   }, []);
 
   const apply = useCallback((next: Viewport) => {
-    setVp(clampViewport(next, total));
-  }, [total]);
+    setVp((cur) => ({
+      ...clampViewport(next, total),
+      visible: next.visible === windowed.visible ? cur.visible : next.visible,
+    }));
+  }, [total, windowed.visible]);
 
   const clampSeek = useCallback((i: number) => {
     apply(seekTo(windowed, total, i));
@@ -190,6 +201,7 @@ export function ProfilerView({
   }, [apply, total, windowed]);
 
   const onWheelChart = useCallback((e: React.WheelEvent<HTMLElement>) => {
+    if (total === 0) return;
     if (e.cancelable) e.preventDefault();
     const wrap = e.currentTarget;
     const rect = wrap.getBoundingClientRect();
@@ -246,7 +258,7 @@ export function ProfilerView({
         frame={picked}
         selectedIndex={total === 0 || windowed.selected < 0 ? -1 : windowed.selected}
         total={total}
-        onClear={onClear}
+        onClear={() => { setHeavyRange(null); onClear(); }}
         onPrev={() => apply(seekTo(windowed, total, windowed.selected - 1))}
         onNext={() => apply(seekTo(windowed, total, windowed.selected + 1))}
         onSeek={clampSeek}
@@ -259,7 +271,6 @@ export function ProfilerView({
         callStacks={callStacks}
         onDeepProfiling={onDeepProfiling}
         onCallStacks={onCallStacks}
-        onInsertFrameReference={total > 0 && windowed.selected >= 0 ? () => onInsertReference?.(createFrameReference(windowed.selected, picked)) : undefined}
       />
       <div
         className="sr-only"
@@ -283,6 +294,11 @@ export function ProfilerView({
           </label>
         ))}
       </div>
+      {getScreenshots && setScreenCapture && (
+        <ScreenFilmstrip fetchStrip={getScreenshots} setCapture={setScreenCapture} connected={connected}
+          start={windowed.start} count={Math.min(windowed.visible, Math.max(0, total - windowed.start))}
+          selected={windowed.selected} onSelect={clampSeek} />
+      )}
       <div
         className="profiler-charts"
         data-testid="profiler-charts"
@@ -296,8 +312,16 @@ export function ProfilerView({
             selectedIndex={localSelected}
             active={active === m.id}
             onSelectFrame={onSelectLocal}
+            frameRange={m.id === 'cpu' && active === 'cpu' && cpuTab === 'left-heavy' && validHeavyRange ? {
+              start: validHeavyRange.start - sliceStart.current, end: validHeavyRange.end - sliceStart.current,
+            } : undefined}
+            onSelectRange={m.id === 'cpu' && getHeavyProfile ? (range) => {
+              if (sliceStart.current !== windowed.start) return;
+              setHeavyRange({ start: windowed.start + range.start, end: windowed.start + range.end });
+              setCpuTab('left-heavy');
+              apply(selectInView(windowed, total, range.start));
+            } : undefined}
             onActivate={() => setActive(m.id)}
-            onInsertReference={() => onInsertReference?.(createModuleReference(m.id, windowed.selected))}
             onWheel={onWheelChart}
             yAxisMax={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering' ? yAxisMax[m.id] : undefined}
             onYAxisMaxChange={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering'
@@ -335,7 +359,11 @@ export function ProfilerView({
           onPointerUp={onResizePointerUp}
           onPointerCancel={onResizePointerUp}
         />
-        <ProfilerDetail moduleId={active} frame={picked} hierarchy={hierarchy} callStacks={callStacks} />
+        <ProfilerDetail moduleId={active} frame={picked} hierarchy={hierarchy} callStacks={callStacks}
+          getHeavyProfile={getHeavyProfile} heavyRange={validHeavyRange} onHeavyRange={setHeavyRange}
+          cpuTab={cpuTab} onCpuTabChange={setCpuTab} totalFrames={total}
+          getTimeline={getTimeline} timelineSelection={windowed.selected} onTimelineSeek={clampSeek}
+          timelineFallback={total > 0 ? pickedFrame : null} refreshTimeline={recording && total - windowed.selected <= 120} />
       </div>
     </div>
   );

@@ -1,4 +1,4 @@
-// Package upac stores UnityPerfAgent sessions without pretending to be a
+// Package upac stores unityperf sessions without pretending to be a
 // Unity Editor .data file. A UPAC archive preserves the original PD3U message
 // bodies so newer decoders can replay old captures losslessly.
 package upac
@@ -11,8 +11,9 @@ import (
 	"io"
 	"os"
 
-	"unityperfagent/internal/protocol"
-	"unityperfagent/internal/unityprofiler"
+	"unityperf/internal/protocol"
+	"unityperf/internal/screenshots"
+	"unityperf/internal/unityprofiler"
 )
 
 const (
@@ -21,11 +22,13 @@ const (
 	maxChunks               = 1 << 24
 	maxMetadataBytes        = 1 << 20
 	maxRawBytes             = 1 << 30
+	maxScreenBytes          = 96 << 20
+	screenFlag       uint16 = 1
 )
 
 var (
 	Magic                 = [4]byte{'U', 'P', 'A', 'C'}
-	ErrBadMagic           = errors.New("不是有效的 UnityPerfAgent .upac 存档")
+	ErrBadMagic           = errors.New("不是有效的 unityperf .upac 存档")
 	ErrUnsupportedVersion = errors.New("UPAC 存档版本不受支持")
 	ErrNoRawData          = errors.New("没有可保存的原始 PD3U 数据")
 )
@@ -35,6 +38,7 @@ var (
 type File struct {
 	Handshake protocol.Handshake
 	Raw       [][]byte
+	Screen    screenshots.Track
 }
 
 type header struct {
@@ -106,7 +110,16 @@ func Encode(w io.Writer, file File) error {
 	if len(metadata) > maxMetadataBytes {
 		return fmt.Errorf("握手信息过大（%d 字节）", len(metadata))
 	}
-	if err := (header{Magic: Magic, Version: Version, ChunkCount: uint32(len(file.Raw)), MetaLen: uint32(len(metadata))}).writeTo(w); err != nil {
+	var flags uint16
+	var screenData []byte
+	if len(file.Screen.Shots) > 0 {
+		screenData, err = json.Marshal(file.Screen)
+		if err != nil || len(screenData) > maxScreenBytes || len(file.Screen.Shots) > screenshots.MaxShots {
+			return errors.New("截图数据无法保存或超过上限")
+		}
+		flags = screenFlag
+	}
+	if err := (header{Magic: Magic, Version: Version, Flags: flags, ChunkCount: uint32(len(file.Raw)), MetaLen: uint32(len(metadata))}).writeTo(w); err != nil {
 		return err
 	}
 	if err := writeAll(w, metadata); err != nil {
@@ -129,6 +142,14 @@ func Encode(w io.Writer, file File) error {
 			return err
 		}
 		totalRawBytes += len(body)
+	}
+	if flags&screenFlag != 0 {
+		var length [4]byte
+		binary.LittleEndian.PutUint32(length[:], uint32(len(screenData)))
+		if err := writeAll(w, length[:]); err != nil {
+			return err
+		}
+		return writeAll(w, screenData)
 	}
 	return nil
 }
@@ -193,10 +214,36 @@ func Decode(r io.Reader) (File, error) {
 		}
 		totalRawBytes += int(n)
 	}
-	if trailing, err := io.ReadAll(r); err != nil {
-		return File{}, err
-	} else if len(trailing) != 0 {
+	if h.Flags&screenFlag != 0 {
+		var length [4]byte
+		if _, err := io.ReadFull(r, length[:]); err != nil {
+			return File{}, err
+		}
+		size := binary.LittleEndian.Uint32(length[:])
+		if size > maxScreenBytes {
+			return File{}, errors.New("截图数据超过上限")
+		}
+		data := make([]byte, size)
+		if _, err := io.ReadFull(r, data); err != nil {
+			return File{}, err
+		}
+		if err := json.Unmarshal(data, &out.Screen); err != nil {
+			return File{}, fmt.Errorf("截图轨道损坏：%w", err)
+		}
+		if len(out.Screen.Shots) > screenshots.MaxShots {
+			return File{}, errors.New("截图数量超过上限")
+		}
+		for index, shot := range out.Screen.Shots {
+			if len(shot.JPEG) == 0 || shot.Epoch <= 0 || (index > 0 && (shot.Epoch < out.Screen.Shots[index-1].Epoch || shot.TimeNS < out.Screen.Shots[index-1].TimeNS)) {
+				return File{}, errors.New("截图轨道无效")
+			}
+		}
+	}
+	var trailing [1]byte
+	if _, err := io.ReadFull(r, trailing[:]); err == nil {
 		return File{}, errors.New("UPAC 存档末尾存在意外数据")
+	} else if err != io.EOF {
+		return File{}, err
 	}
 	return out, nil
 }

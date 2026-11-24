@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>unityperfagent.exe</string>
+    <string>unityperf.exe</string>
     <key>CFBundleIdentifier</key>
-    <string>com.unityperfagent.app</string>
+    <string>com.unityperf.app</string>
     <key>CFBundleName</key>
-    <string>UnityPerfAgent</string>
+    <string>unityperf</string>
     <key>CFBundleDisplayName</key>
-    <string>UnityPerfAgent</string>
+    <string>unityperf</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

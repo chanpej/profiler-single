@@ -11,21 +11,26 @@ function renderBar(over: Partial<Parameters<typeof MenuBar>[0]> = {}) {
       onClear={vi.fn()}
       onFrames={vi.fn()}
       onAnalysis={vi.fn()}
-      onSettings={vi.fn()}
       {...over}
     />,
   );
 }
 
 describe('MenuBar', () => {
-  it('展示文件 / 视图 / 诊断 / 设置', () => {
+  it('offers native Unity data export', async () => {
+    const onExportUnityData = vi.fn();
+    renderBar({ onExportUnityData });
+    await userEvent.click(screen.getByRole('menuitem', { name: '文件' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '导出 Unity .data' }));
+    expect(onExportUnityData).toHaveBeenCalledOnce();
+  });
+  it('展示文件、视图和诊断入口', () => {
     renderBar();
     expect(screen.getByTestId('menubar')).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '文件' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '视图' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '诊断' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: 'Agent Log' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: '设置' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Agent Log' })).not.toBeInTheDocument();
   });
 
   it('文件菜单触发加载 / 保存 / 清空', async () => {
@@ -55,24 +60,17 @@ describe('MenuBar', () => {
     expect(onFrames).toHaveBeenCalled();
   });
 
-  it('视图菜单切换 Agent 面板', async () => {
-    const onToggleAgent = vi.fn();
-    renderBar({ onToggleAgent, agentCollapsed: true });
+  it('视图菜单只提供帧数据入口', async () => {
+    renderBar();
     await userEvent.click(screen.getByRole('menuitem', { name: '视图' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: '展开 Agent 面板' }));
-    expect(onToggleAgent).toHaveBeenCalled();
+    expect(screen.getAllByRole('menuitem', { name: '帧数据' })).toHaveLength(1);
+    expect(screen.queryByRole('menuitem', { name: /Agent 面板/ })).not.toBeInTheDocument();
   });
 
-  it('诊断、Agent Log 与设置直接触发对应操作', async () => {
+  it('诊断入口触发对应操作', async () => {
     const onAnalysis = vi.fn();
-    const onSettings = vi.fn();
-    const onOpenAgentLog = vi.fn();
-    renderBar({ onAnalysis, onSettings, onOpenAgentLog });
+    renderBar({ onAnalysis });
     await userEvent.click(screen.getByRole('menuitem', { name: '诊断' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: 'Agent Log' }));
-    await userEvent.click(screen.getByRole('menuitem', { name: '设置' }));
-    expect(onAnalysis).toHaveBeenCalled();
-    expect(onOpenAgentLog).toHaveBeenCalled();
-    expect(onSettings).toHaveBeenCalled();
+    expect(onAnalysis).toHaveBeenCalledOnce();
   });
 });

@@ -1,6 +1,6 @@
-# UnityPerfAgent
+# unityperf
 
-UnityPerfAgent 是一款独立于 Unity Editor 的性能分析工具：经逆向分析实现与 Editor Profiler 同源的真机采集协议，连接 Unity 2022 Development Build，采集 CPU / Memory / Rendering 等模块数据，并通过 ACP（Agent Client Protocol）接入 LLM Agent，实现自动化性能诊断。
+unityperf 是一款独立于 Unity Editor 的性能分析工具：经逆向分析实现与 Editor Profiler 同源的真机采集协议，连接 Unity 2022 Development Build，采集 CPU / Memory / Rendering 等模块数据，并支持本地规则分析。
 
 > 当前仅支持 **Unity 2022**（其他版本暂不考虑）。握手阶段会校验 Player 上报的 Unity 版本。生产包无法 Attach Profiler。
 
@@ -12,7 +12,6 @@ UnityPerfAgent 是一款独立于 Unity Editor 的性能分析工具：经逆向
 | 前端 | React 18 + TypeScript + Vite |
 | 图标 | [lucide-react](https://lucide.dev/) |
 | 虚拟化 | [@tanstack/react-virtual](https://tanstack.com/virtual)（十万级帧数据流畅滚动） |
-| LLM 接入 | [ACP（Agent Client Protocol）](https://agentclientprotocol.com) via [acp-go-sdk](https://github.com/coder/acp-go-sdk) |
 
 ## 架构
 
@@ -30,10 +29,9 @@ internal/protocol       Profiler 模块快照编码（FrameData 164 字节，兼
 internal/device         Profiler 客户端封装
 internal/collector      环形缓冲会话存储（O(1) 追加、范围读取、按索引取帧、聚合统计）
 internal/analyzer       规则化诊断：帧尖峰 / GC 尖峰 / 低帧率 / DrawCall / 内存增长
-internal/llm            ACP 客户端：stdio 拉起外部 LLM Agent（隐藏控制台窗口）
 internal/procutil       外部进程封装：Windows 下 CREATE_NO_WINDOW + HideWindow
 services                Wails 服务层（连接管理、组播发现、数据查询、事件节流推送）
-frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数据 / 诊断 / 设置
+frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数据 / 诊断
 ```
 
 ## 性能设计
@@ -60,15 +58,16 @@ frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数�
 | Physics | Active Rigidbodies、Colliders |
 | UI | Batches、Vertices |
 
-外部程序（ACP Agent 等 exe）一律通过 `procutil` 启动，Windows 下隐藏控制台黑窗。
+外部程序一律通过 `procutil` 启动，Windows 下隐藏控制台黑窗。
 
 ## 存档格式
 
-- **`.upac`**：UnityPerfAgent 的正式会话格式。保存握手元信息和完整的原始 PD3U
+- **`.upac`**：unityperf 的正式会话格式。保存握手元信息和完整的原始 PD3U
   报文体；打开时使用当前 Decoder 重放，因此后续解码能力升级后仍可重新分析旧存档。
-  实时采集只能保存为此格式。
-- **`.data`**：Unity Editor Profiler 的私有离线格式，仅支持导入读取。工具不会从
-  PD3U 或 UI 摘要帧伪造 `.data`，以避免生成 Editor 无法打开的文件。
+- **`.data`**：Unity Editor Profiler 的离线格式。通过「文件 → 导出 Unity .data」选择
+  与录制兼容的 Unity 或团结 2022 Editor 可执行文件。工具在临时项目中启动该 Editor，
+  由其原生保存并验证文件可重新加载。导出需要单个 Player 会话的原始录制，不含截图，
+  并受 Editor 的帧历史上限约束。
 - **`.uppc`**：透明抓包代理的研究格式，仅用于保存同一 Editor 会话的原始 PD3U
   对照数据，不作为常规用户存档。
 
@@ -81,29 +80,6 @@ frontend                React UI：Profiler（对齐 Unity Profiler）/ 帧数�
 - 堆叠时间轴：点击选帧，录制时自动跟随最新帧；
 - 详情面板：CPU Hierarchy / Timeline、Memory Simple、Rendering/Audio/Physics/UI 计数器表。
 
-## LLM 诊断（ACP）
-
-在“设置”页配置任意支持 ACP 的 Agent，例如：
-
-- Gemini CLI：命令 `gemini`，参数 `--experimental-acp`
-- Claude Code（ACP 适配器）：命令 `claude-code-acp`
-
-诊断时会把规则分析报告（JSON）交给 Agent，返回中文诊断结论与优化建议。
-
-### MCP 性能数据工具
-
-每次创建 Agent 会话时，应用会通过 ACP 的 `session/new.mcpServers` 注入内置
-stdio MCP Server。Agent 可按需查询当前内存中的实时采集数据、已加载的 `.upac`
-存档或 Unity 2022 `.data` 帧数据，而不是只依赖预先生成的规则报告：
-
-- `performance_session_summary`：连接状态、聚合指标与规则分析；
-- `performance_frames`：范围帧摘要（单次最多 200 帧）；
-- `performance_frame` / `performance_cpu_hierarchy`：单帧完整计数器及 CPU 层级；
-- `performance_analysis`：重新运行内置规则分析。
-
-MCP bridge 只监听 `127.0.0.1`，并使用每次运行生成的令牌鉴权。菜单栏的
-**Agent Log** 会打开独立原生窗口，显示 Agent 对话和 MCP 请求/响应的完整 payload。
-
 ## 开发
 
 ```bash
@@ -111,28 +87,45 @@ MCP bridge 只监听 `127.0.0.1`，并使用每次运行生成的令牌鉴权。
 go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.8
 
 wails3 dev     # 开发模式
-wails3 build   # 产物输出到 bin/unityperfagent.exe
+wails3 build   # 产物输出到 bin/unityperf.exe
 ```
 
 ## 测试
 
 ```bash
-go test ./...            # Go 后端测试（协议/采集/分析/设备/ACP/服务层）
+go test ./...            # Go 后端测试（协议/采集/分析/设备/服务层）
 cd frontend && npm test  # 前端测试（vitest + testing-library）
 ```
 
 ## 真机接入
 
-目标设备需运行 **Unity 2022 Development Build**（测试包为 Unity 2022.3.47f1），并开启 USB 调试。
+目标设备需运行 **Unity 2022 Development Build**（测试包为 Unity 2022.3.47f1）。使用 USB 时需开启 USB 调试。
 
 1. **USB（adb forward）**：与官方 Profiler 相同，执行  
    `adb forward tcp:<本机端口> localabstract:Unity-{应用包名}`  
    （不是把设备 `tcp:55000` 当 USB 通道）。工具会自动从 `/proc/net/unix` 和前台应用解析 `Unity-{bundleId}`。界面点「USB 连接」。  
    若 Player 先推送 USB 宣告：`[Debug]` 只表示脚本调试，`Flags` bit1 为 SupportsProfile。Development Build 即使 `[Debug] 0` 也可以 Attach。
-2. 工具以 `UnityEditor` 身份完成 PlayerConnection 握手并启用 Profiler，仅接受 Unity 2022；
-3. 之后 Player 按帧推送 Profiler 模块计数器快照（CPU 分类、内存分项、渲染/音频/物理/UI）。
+2. **手机 IP 直连**：电脑和手机在可互通的局域网内时，输入手机 IP 并点「IP 直连」。工具尝试 `55000–55016/TCP`，选择首个通过 Profiler 握手的 Player。
+3. 工具以 `UnityEditor` 身份完成 PlayerConnection 握手并启用 Profiler，仅接受 Unity 2022；
+4. 之后 Player 按帧推送 Profiler 模块计数器快照（CPU 分类、内存分项、渲染/音频/物理/UI）。
 
 生产包无法 Attach Profiler。
+
+## 团结 Autoconnected Player
+
+unityperf 可直接接收基于 Unity 2022 的团结微信小游戏实时采样，采集电脑可独立运行 unityperf。实测版本为团结 `2022.3.62t13`。
+
+1. 构建微信小游戏 Development Build 时启用 Autoconnect Profiler，并把 Profiler 目标设为采集电脑的局域网 IP，端口设为 `37100`。
+2. 打开 unityperf 即会监听 `37100`，工具栏显示本机 IP 和等待状态。若端口被占用，释放端口后可点 **小游戏自动连接** 重试。
+3. 在同一局域网内进入小游戏。若游戏之前已连接团结 Editor，重新进入以建立新的连接。
+
+点击连接工具栏的 **Unity 日志** 查看最近 500 条日志。微信小游戏通过团结 Console 使用的原生 PlayerConnection 通道发送日志，可直接使用已有的 Autoconnect Profiler 开发包。Android USB 连接还可从当前游戏进程的 ADB logcat 读取 `Unity` 日志。
+
+播放器的主线程分块在上报时发生缺失，采集会跳过受损帧，并从下一个可识别的帧边界恢复。日志中的 `MissingMainChunks`、`DiscardedMainChunks` 和 `FrameResyncs` 分别记录缺失分块、等待恢复时跳过的分块和恢复次数。
+
+在 CPU Usage 的 Timeline 中点击采样块，即可查看完整采样路径、总耗时、自身耗时和 Player 上报的符号调用栈。
+
+通过 ADB 连接 Android 手机后，点击「采集截图」开启画面轨道。小游戏使用唯一一台在线的 ADB 手机。支持 Android `screenrecord` 帧流时优先使用低分辨率连续采集，最高保留每秒 8 张，否则回退到单张截图。点击缩略图可跳到对应性能帧。画面使用 Player 帧时钟估算同步，最近 1440 张附随 `.upac` 保存。
 
 ## Unity Editor 对照抓包
 

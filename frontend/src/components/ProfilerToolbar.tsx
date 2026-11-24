@@ -1,4 +1,4 @@
-import { Bot, ChevronLeft, ChevronRight, Circle, Eraser, FolderOpen, Layers, ListTree, MousePointerClick, Pause, Play, SkipForward } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Circle, Eraser, FolderOpen, Layers, ListTree, MousePointerClick, Pause, Play, SkipForward } from 'lucide-react';
 import { formatFps, formatGCAlloc, formatMs } from '../lib/format';
 import type { FrameData } from '../types';
 
@@ -21,7 +21,6 @@ interface Props {
   onImport: () => void;
   onDeepProfiling?: (on: boolean) => void;
   onCallStacks?: (on: boolean) => void;
-  onInsertFrameReference?: () => void;
 }
 
 /** Unity Profiler 2022 风格顶栏：Record / Pause / Deep Profile / Call Stacks / Clear / Load / Save / 帧导航。 */
@@ -30,7 +29,6 @@ export function ProfilerToolbar({
   deepProfiling = false, callStacks = false,
   onClear, onPrev, onNext, onSeek, onCurrent, onToggleRecord, onPause, onImport,
   onDeepProfiling, onCallStacks,
-  onInsertFrameReference,
 }: Props) {
   const hasSelection = total > 0 && selectedIndex >= 0;
   const atStart = !hasSelection || selectedIndex <= 0;
@@ -122,17 +120,6 @@ export function ProfilerToolbar({
         <SkipForward size={14} aria-hidden />
       </button>
       <span className="profiler-sep" aria-hidden />
-      {hasSelection && (
-        <button
-          type="button"
-          className="btn ghost profiler-chat-reference"
-          title="插入当前帧到 Agent Chat"
-          aria-label="插入当前帧到 Agent Chat"
-          onClick={onInsertFrameReference}
-        >
-          <Bot size={14} aria-hidden />
-        </button>
-      )}
       {frame ? (
         <>
           <Layers size={14} className="dim" aria-hidden />

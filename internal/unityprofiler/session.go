@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 // DialTimeout / HandshakeTimeout 与 Editor 连接 Player 的等待相当。
@@ -114,10 +114,17 @@ type Session struct {
 	deep       bool
 	callStacks bool
 	onRaw      func([]byte)
+	onLog      func(string, string)
 }
 
 // NewSession 创建未连接的会话。
 func NewSession() *Session { return &Session{} }
+
+func (s *Session) SetLogHandler(fn func(string, string)) {
+	s.mu.Lock()
+	s.onLog = fn
+	s.mu.Unlock()
+}
 
 // SetRawHandler 注册原始 Profiler 报文体回调。每条 MsgIDProfilerData 在解码前原样送达。
 // 回调不得重入本会话的锁。
@@ -132,6 +139,32 @@ func (s *Session) SetRawHandler(fn func([]byte)) {
 // 与 Editor 一致：连上后立即下发 Profiler 开启报文，不等 Player 宣告；随后读取
 // Player 的引擎信息与宣告，作为握手结果返回。
 func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
+	return s.connectTCP(host, port, DialTimeout, onFrame, onClosed)
+}
+
+func (s *Session) ConnectDirect(host string, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, int, error) {
+	return s.connectDirectRange(host, PlayerPortMin, PlayerPortMax, onFrame, onClosed)
+}
+
+func (s *Session) connectDirectRange(host string, first, last int, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, int, error) {
+	var handshakeErr error
+	for port := first; port <= last; port++ {
+		handshake, err := s.connectTCP(host, port, 200*time.Millisecond, onFrame, onClosed)
+		if err == nil {
+			return handshake, port, nil
+		}
+		var dialErr *net.OpError
+		if !errors.As(err, &dialErr) || dialErr.Op != "dial" {
+			handshakeErr = err
+		}
+	}
+	if handshakeErr != nil {
+		return protocol.Handshake{}, 0, fmt.Errorf("%s 上的 Player 握手失败: %w", host, handshakeErr)
+	}
+	return protocol.Handshake{}, 0, fmt.Errorf("在 %s 的 TCP 端口 %d–%d 未找到 Unity Player，请确认设备与电脑网络互通且游戏是 Development Build", host, first, last)
+}
+
+func (s *Session) connectTCP(host string, port int, timeout time.Duration, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
 	s.mu.Lock()
 	if s.conn != nil {
 		s.mu.Unlock()
@@ -143,13 +176,21 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 		port = DefaultPort
 	}
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, DialTimeout)
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return protocol.Handshake{}, fmt.Errorf("unityprofiler: dial %s: %w", addr, err)
 	}
 	if tc, ok := conn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 	}
+	return s.connectTransport(conn, false, onFrame, onClosed)
+}
+
+func (s *Session) ConnectIncoming(conn net.Conn, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
+	return s.connectTransport(conn, true, onFrame, onClosed)
+}
+
+func (s *Session) connectTransport(conn net.Conn, incoming bool, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
 
 	mask, categories := s.AreaMask, s.Categories
 	if mask == 0 {
@@ -158,23 +199,33 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 	if len(categories) == 0 {
 		categories = EditorCategories
 	}
-	if err := WriteProfilerStart(conn, mask, categories); err != nil {
-		conn.Close()
-		return protocol.Handshake{}, fmt.Errorf("unityprofiler: 下发 Profiler 开启报文失败: %w", err)
+	startProfiler := func() error { return WriteProfilerStart(conn, mask, categories) }
+	_ = conn.SetWriteDeadline(time.Now().Add(HandshakeTimeout))
+	if !incoming {
+		if err := startProfiler(); err != nil {
+			conn.Close()
+			return protocol.Handshake{}, fmt.Errorf("unityprofiler: 下发 Profiler 开启报文失败: %w", err)
+		}
 	}
-
 	br := bufio.NewReaderSize(conn, 1<<20)
 	_ = conn.SetReadDeadline(time.Now().Add(HandshakeTimeout))
-	intro, err := readPlayerIntro(br)
+	s.mu.Lock()
+	onLog := s.onLog
+	s.mu.Unlock()
+	intro, err := readPlayerIntro(br, incoming, startProfiler, onLog)
+	_ = conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		conn.Close()
-		if isTimeout(err) {
+		if incoming && (isTimeout(err) || errors.Is(err, context.DeadlineExceeded)) {
+			return protocol.Handshake{}, fmt.Errorf("unityprofiler: 小游戏已连接，但未在 %s 内开始发送 Profiler 数据", HandshakeTimeout)
+		}
+		if !incoming && isTimeout(err) {
 			return protocol.Handshake{}, fmt.Errorf("%w（%s 内无响应）：Player 同时只服务一个 Profiler 客户端，"+
 				"请确认 Unity Editor 的 Profiler 已断开、且本工具没有残留连接；仍不行就重启游戏进程", ErrPlayerSilent, HandshakeTimeout)
 		}
 		return protocol.Handshake{}, err
 	}
-	if !intro.Info.SupportsProfile() {
+	if !incoming && !intro.Info.SupportsProfile() {
 		conn.Close()
 		return protocol.Handshake{}, &PlayerRejectError{
 			Info:   intro.Info,
@@ -184,10 +235,24 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 	_ = conn.SetReadDeadline(time.Time{})
 
 	hs := handshakeFromIntro(intro)
+	if incoming {
+		if hs.DeviceName == "" {
+			hs.DeviceName = "Autoconnected Player"
+		}
+		hs.OS = "微信小游戏"
+		hs.ProfilerStreamVersion = intro.Stream.FormatVersion
+		hs.MainThreadID = intro.Stream.MainThreadID
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 
 	s.mu.Lock()
+	if s.conn != nil {
+		s.mu.Unlock()
+		cancel()
+		conn.Close()
+		return protocol.Handshake{}, errors.New("unityprofiler: already connected")
+	}
 	s.conn = conn
 	s.handshake = hs
 	s.decoder = NewDecoder(nil)
@@ -197,7 +262,7 @@ func (s *Session) Connect(host string, port int, onFrame FrameHandler, onClosed 
 	s.callStacks = false
 	s.mu.Unlock()
 
-	go s.readLoop(ctx, conn, br, intro.Pending, onFrame, onClosed, done)
+	go s.readLoop(ctx, conn, br, intro.Pending, incoming, onFrame, onLog, onClosed, done)
 	return hs, nil
 }
 
@@ -226,7 +291,7 @@ func WriteProfilerStop(w interface{ Write([]byte) (int, error) }) error {
 func selfAnnouncement() string {
 	host, _ := os.Hostname()
 	if host == "" {
-		host = "UnityPerfAgent"
+		host = "unityperf"
 	}
 	return FormatAnnouncement(PlayerInfo{
 		IP:          "127.0.0.1",
@@ -235,8 +300,8 @@ func selfAnnouncement() string {
 		GUID:        "1",
 		ID:          fmt.Sprintf("%s(%s)", EditorIdentity, host),
 		Debug:       true,
-		PackageName: "UnityPerfAgent",
-		ProjectName: "UnityPerfAgent",
+		PackageName: "unityperf",
+		ProjectName: "unityperf",
 	})
 }
 
@@ -244,37 +309,57 @@ func selfAnnouncement() string {
 type playerIntro struct {
 	Engine PlayerEngineInfo
 	Info   PlayerInfo
+	Stream StreamHeader
 	// Pending 是握手期间先到的数据流报文体，必须原样交给解码器。
 	// 连接时若 Player 已在采集，数据流头会排在宣告之前，丢掉它就再也拿不到主线程 ID。
 	Pending [][]byte
 }
 
 // readPlayerIntro 读取 Player 的引擎信息与宣告报文，其间到达的数据流报文会被留存。
-func readPlayerIntro(r *bufio.Reader) (playerIntro, error) {
+func readPlayerIntro(r *bufio.Reader, incoming bool, startProfiler func() error, onLog func(string, string)) (playerIntro, error) {
 	var intro playerIntro
 	haveEngine, haveInfo := false, false
-	for i := 0; i < 64 && !(haveEngine && haveInfo); i++ {
+	for index := 0; incoming || (index < 64 && !(haveEngine && haveInfo)); index++ {
 		msg, err := ReadMessage(r)
 		if err != nil {
 			return playerIntro{}, fmt.Errorf("unityprofiler: 读取 Player 宣告失败: %w", err)
 		}
 		switch msg.ID {
 		case MsgIDProfilerData:
-			intro.Pending = append(intro.Pending, msg.Body)
+			if incoming {
+				if header, err := ParseStreamHeader(msg.Body); err == nil {
+					intro.Stream = header
+					intro.Engine.Version = header.EngineVersion
+					intro.Pending = append(intro.Pending, msg.Body)
+					return intro, nil
+				}
+			} else {
+				intro.Pending = append(intro.Pending, msg.Body)
+			}
 		case MsgIDPlayerInfo:
 			engine, err := ParsePlayerEngineInfo(msg.Body)
 			if err != nil {
 				return playerIntro{}, err
 			}
 			intro.Engine = engine
+			if incoming && !haveEngine {
+				if err := startProfiler(); err != nil {
+					return playerIntro{}, fmt.Errorf("unityprofiler: 下发小游戏 Profiler 开启报文失败: %w", err)
+				}
+			}
 			haveEngine = true
 		case MsgIDAnnounce:
 			info, err := ParseAnnouncement(AnnouncementFromBody(msg.Body))
 			if err != nil {
+				if incoming {
+					continue
+				}
 				return playerIntro{}, err
 			}
 			intro.Info = info
 			haveInfo = true
+		default:
+			dispatchPlayerLog(msg, onLog)
 		}
 	}
 	if !haveInfo {
@@ -320,7 +405,7 @@ func deviceModelFromID(id string) string {
 	return strings.ReplaceAll(strings.TrimSpace(inner), "_", " ")
 }
 
-func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader, pending [][]byte, onFrame FrameHandler, onClosed func(error), done chan struct{}) {
+func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader, pending [][]byte, incoming bool, onFrame FrameHandler, onLog func(string, string), onClosed func(error), done chan struct{}) {
 	defer close(done)
 
 	// 解码出的帧先攒着，等放开会话锁之后再回调。
@@ -370,7 +455,9 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 	for loopErr == nil {
 		// 每条报文都续一次读等待。超时通常发生在「下一条报文的第一个字节」
 		// （App 进后台、Player 暂停上报），bufio 里没有半包，可以继续等。
-		_ = conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
+		if !incoming {
+			_ = conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
+		}
 		msg, err := ReadMessage(br)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -383,6 +470,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 			break
 		}
 		if msg.ID != MsgIDProfilerData {
+			dispatchPlayerLog(msg, onLog)
 			continue
 		}
 		emitRaw(msg.Body)
@@ -469,12 +557,11 @@ func (s *Session) PatchHandshake(fn func(*protocol.Handshake)) {
 // DecodeStats 返回数据流解码指标，供自检与排障。
 func (s *Session) DecodeStats() DecodeStats {
 	s.mu.Lock()
-	dec := s.decoder
-	s.mu.Unlock()
-	if dec == nil {
+	defer s.mu.Unlock()
+	if s.decoder == nil {
 		return DecodeStats{}
 	}
-	return dec.Stats()
+	return s.decoder.Stats()
 }
 
 // CounterNames 返回 Player 上报的计数器名单。

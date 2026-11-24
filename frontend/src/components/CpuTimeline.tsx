@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FrameData, SampleNode } from '../types';
+import type { CpuThreadSamples, CpuTimelineFrame, FrameData, SampleNode } from '../types';
 import { formatMs } from '../lib/format';
 import {
   BAR_H,
+  BAR_GAP,
+  MIN_SPAN_MS,
   RULER_H,
   THREAD_LABEL_W,
   barEnd,
@@ -12,9 +14,11 @@ import {
   hitTest,
   layoutHeight,
   layoutTimeline,
+  layoutTimelineContext,
   msFromX,
   panDeltaFromPixels,
   panWindow,
+  projectSample,
   threadHeight,
   THREAD_GAP,
   timeTicks,
@@ -29,6 +33,10 @@ import {
 interface Props {
   frame: FrameData;
   hierarchy: SampleNode[];
+  threadSamples?: CpuThreadSamples[];
+  context?: CpuTimelineFrame[];
+  loadingContext?: boolean;
+  onSelectNeighbor?: (frame: CpuTimelineFrame) => void;
 }
 
 const RULER = 'rgba(148, 163, 184, 0.75)';
@@ -37,40 +45,116 @@ const SELECT = 'rgba(248, 250, 252, 0.95)';
 const LABEL_BG = '#12151c';
 const PLOT_BG = '#0c0f14';
 const THREAD_BG = 'rgba(26, 31, 41, 0.45)';
+const EMPTY_CONTEXT: CpuTimelineFrame[] = [];
+const labelStyleKey = 'upa.cpuTimeline.labelStyle';
+type LabelStyle = 'split' | 'unity';
+
+function readLabelStyle(): LabelStyle {
+  try {
+    return localStorage.getItem(labelStyleKey) === 'unity' ? 'unity' : 'split';
+  } catch {
+    return 'split';
+  }
+}
+
+function drawUnityLabel(ctx: CanvasRenderingContext2D, bar: TimelineBar, left: number, right: number, top: number) {
+  const width = right - left;
+  if (width <= 4) return;
+  const text = `${bar.name} (${formatMs(bar.durationMs)})`;
+  const textWidth = ctx.measureText(text).width;
+  const fade = Math.min(1, (width - 4) / Math.min(80, Math.max(1, textWidth)));
+  ctx.save();
+  ctx.globalAlpha *= fade;
+  ctx.fillStyle = 'rgba(248, 250, 252, 0.92)';
+  ctx.beginPath();
+  ctx.rect(left, top, width, BAR_H);
+  ctx.clip();
+  ctx.fillText(text, left + Math.max(0, (width - textWidth) / 2), top + BAR_H / 2);
+  ctx.restore();
+}
 
 /**
  * Unity Profiler 2022 CPU Timeline：线程泳道 + 嵌套采样条。
- * 滚轮缩放（锚在指针），拖拽平移，单击选中，双击放大到该采样。
+ * 滚轮缩放（锚在指针），中键拖拽平移，单击选中，双击放大到该采样。
  */
-export function CpuTimeline({ frame, hierarchy }: Props) {
+export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_CONTEXT, loadingContext = false, onSelectNeighbor }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  const layout = useMemo(() => layoutTimeline(hierarchy, frame), [hierarchy, frame]);
-  const [win, setWin] = useState<TimeWindow>(() => fitWindow(layout.totalMs));
+  const currentFrame = context.find((candidate) => candidate.selected);
+  const current = useMemo(() => {
+    const layout = layoutTimeline(hierarchy, currentFrame ? null : frame, currentFrame?.threads ?? threadSamples);
+    return currentFrame ? { ...layout, totalMs: Math.max(layout.totalMs, currentFrame.durationMs) } : layout;
+  }, [hierarchy, frame, currentFrame, threadSamples]);
+  const layout = useMemo(() => layoutTimelineContext(current, context), [current, context]);
+  const fit = useMemo(() => currentFrame && currentFrame.durationMs > 0
+    ? fitWindow(currentFrame.durationMs)
+    : fitWindow(current.totalMs, current.startMs), [currentFrame?.durationMs, current.startMs, current.totalMs]);
+  const [win, setWin] = useState<TimeWindow>(() => fit);
   const winRef = useRef(win);
   winRef.current = win;
   const [selected, setSelected] = useState<string>('');
-  const [hover, setHover] = useState<{ bar: TimelineBar; x: number; y: number } | null>(null);
+  const [labelStyle, setLabelStyle] = useState<LabelStyle>(readLabelStyle);
+  const [visibleDepths, setVisibleDepths] = useState<Record<string, number>>({});
+  const [pointer, setPointer] = useState<{ clientX: number; clientY: number } | null>(null);
+  const [panning, setPanning] = useState(false);
+  const resize = useRef<{ thread: string; startY: number; depth: number } | null>(null);
+  const rangeDrag = useRef<{ pointerId: number; startX: number; startWin: TimeWindow } | null>(null);
   const drag = useRef<{
     pointerId: number;
     startX: number;
+    startY: number;
+    scrollTop: number;
+    mode: 'select' | 'pan' | 'zoom';
     startWin: TimeWindow;
     moved: boolean;
   } | null>(null);
+  const visibleThreads = useMemo(() => layout.threads.map((thread) => ({
+    ...thread, maxDepth: Math.min(thread.maxDepth, visibleDepths[thread.id] ?? thread.maxDepth),
+  })), [layout.threads, visibleDepths]);
+  const laneControls = useMemo(() => {
+    let top = RULER_H;
+    return visibleThreads.map((thread, index) => {
+      const bottom = top + threadHeight(thread.maxDepth);
+      const lane = { thread, top, bottom, maxDepth: layout.threads[index].maxDepth };
+      top = bottom + THREAD_GAP;
+      return lane;
+    });
+  }, [visibleThreads, layout.threads]);
+  const previousLayout = useRef({ frameIndex: frame.frameIndex, fit });
+  const hasSwitchedFrame = useRef(false);
+  const pendingNeighbor = useRef<CpuTimelineFrame | null>(null);
 
   useEffect(() => {
-    setWin(fitWindow(layout.totalMs));
-    setSelected('');
-    setHover(null);
-  }, [layout.totalMs, frame.frameIndex, hierarchy]);
+    const previous = previousLayout.current;
+    previousLayout.current = { frameIndex: frame.frameIndex, fit };
+    if (previous.frameIndex !== frame.frameIndex) {
+      hasSwitchedFrame.current = true;
+      const neighbor = pendingNeighbor.current;
+      pendingNeighbor.current = null;
+      if (neighbor?.frameIndex === frame.frameIndex) {
+        setWin((cur) => ({ ...cur, startMs: cur.startMs - neighbor.offsetMs }));
+      }
+      setSelected('');
+      setPointer(null);
+      setPanning(false);
+      drag.current = null;
+      rangeDrag.current = null;
+    }
+    if (!loadingContext) {
+      const followInitialFit = !hasSwitchedFrame.current;
+      setWin((cur) => followInitialFit && cur.startMs === previous.fit.startMs && cur.spanMs === previous.fit.spanMs
+        ? fit
+        : clampWindow(cur, layout.totalMs, layout.startMs));
+    }
+  }, [layout.totalMs, layout.startMs, frame.frameIndex, fit, loadingContext]);
 
   const selectedBar = useMemo(() => {
-    for (const th of layout.threads) {
+    for (const th of current.threads) {
       const bar = th.bars.find((b) => b.id === selected);
       if (bar) return bar;
     }
     return null;
-  }, [layout.threads, selected]);
+  }, [current.threads, selected]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -78,7 +162,7 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
     if (!canvas || !wrap) return;
     const dpr = window.devicePixelRatio || 1;
     const w = wrap.clientWidth;
-    const contentH = Math.max(layoutHeight(layout.threads), wrap.clientHeight);
+    const contentH = Math.max(layoutHeight(visibleThreads), wrap.clientHeight);
     if (w <= 0) return;
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(contentH * dpr);
@@ -124,7 +208,7 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
 
     let top = RULER_H;
     ctx.textBaseline = 'middle';
-    layout.threads.forEach((th, ti) => {
+    visibleThreads.forEach((th, ti) => {
       const h = threadHeight(th.maxDepth);
       if (ti % 2 === 0) {
         ctx.fillStyle = THREAD_BG;
@@ -136,42 +220,85 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
       ctx.beginPath();
       ctx.rect(4, top, THREAD_LABEL_W - 8, h);
       ctx.clip();
-      ctx.fillText(th.name, 8, top + h / 2);
+      ctx.fillText(th.name, 22, barY(top, 0) + BAR_H / 2);
       ctx.restore();
 
-      const viewStart = cur.startMs;
-      const viewEnd = cur.startMs + cur.spanMs;
       ctx.font = '10px Inter, Segoe UI, system-ui, sans-serif';
       for (const bar of th.bars) {
-        const end = barEnd(bar);
-        if (end < viewStart || bar.startMs > viewEnd) continue;
-        const x0 = THREAD_LABEL_W + xFromMs(bar.startMs, plotW, cur);
-        const x1 = THREAD_LABEL_W + xFromMs(end, plotW, cur);
-        const bx = Math.max(THREAD_LABEL_W, x0);
-        const bw = Math.max(1, Math.min(w, x1) - bx);
+        if (bar.depth > th.maxDepth) continue;
+        const bounds = projectSample(bar, plotW, cur);
+        if (!bounds) continue;
+        const bx = THREAD_LABEL_W + bounds.left;
+        const bw = bounds.right - bounds.left;
         const by = barY(top, bar.depth);
         ctx.fillStyle = bar.color;
-        ctx.globalAlpha = bar.id === selected ? 1 : 0.92;
+        ctx.globalAlpha = bar.ghost ? 0.3 : 1;
         ctx.fillRect(bx, by, bw, BAR_H);
-        ctx.globalAlpha = 1;
         if (bar.id === selected) {
           ctx.strokeStyle = SELECT;
           ctx.lineWidth = 1.5;
           ctx.strokeRect(bx + 0.5, by + 0.5, Math.max(0, bw - 1), BAR_H - 1);
         }
-        if (bw >= 28) {
-          ctx.fillStyle = 'rgba(248, 250, 252, 0.92)';
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(bx + 2, by, bw - 4, BAR_H);
-          ctx.clip();
-          ctx.fillText(bar.name, bx + 4, by + BAR_H / 2);
-          ctx.restore();
+        if (bw >= 12 && (bounds.continuesLeft || bounds.continuesRight)) {
+          ctx.strokeStyle = 'rgba(248, 250, 252, 0.75)';
+          ctx.lineWidth = 1;
+          const middle = by + BAR_H / 2;
+          const drawContinuation = (edge: number, direction: number) => {
+            ctx.beginPath();
+            ctx.moveTo(edge + 4 * direction, middle - 3);
+            ctx.lineTo(edge + direction, middle);
+            ctx.lineTo(edge + 4 * direction, middle + 3);
+            ctx.stroke();
+          };
+          if (bounds.continuesLeft) drawContinuation(bx, 1);
+          if (bounds.continuesRight) drawContinuation(bx + bw, -1);
         }
+        if (labelStyle === 'unity') {
+          drawUnityLabel(ctx, bar, bx + (bounds.continuesLeft ? 8 : 3), bx + bw - (bounds.continuesRight ? 8 : 3), by);
+        } else if (bw >= 18) {
+          ctx.fillStyle = 'rgba(248, 250, 252, 0.92)';
+          const labelStart = bx + (bounds.continuesLeft ? 8 : 4);
+          const labelEnd = bx + bw - (bounds.continuesRight ? 8 : 2);
+          const duration = formatMs(bar.durationMs);
+          const durationStart = labelEnd - ctx.measureText(duration).width;
+          if (durationStart >= labelStart) {
+            ctx.fillText(duration, durationStart, by + BAR_H / 2);
+          }
+          const nameEnd = durationStart - 6;
+          if (nameEnd - labelStart >= 14) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(labelStart, by, nameEnd - labelStart, BAR_H);
+            ctx.clip();
+            ctx.fillText(bar.name, labelStart, by + BAR_H / 2);
+            ctx.restore();
+          }
+        }
+        ctx.globalAlpha = 1;
       }
       top += h + THREAD_GAP;
     });
-  }, [layout.threads, selected]);
+
+    if (context.length > 1) {
+      ctx.font = '10px Menlo, Consolas, monospace';
+      for (const boundary of context) {
+        const x = THREAD_LABEL_W + xFromMs(boundary.offsetMs, plotW, cur);
+        if (x < THREAD_LABEL_W || x >= w) continue;
+        ctx.strokeStyle = boundary.selected ? 'rgba(148, 163, 184, 0.8)' : 'rgba(148, 163, 184, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x + 0.5, RULER_H);
+        ctx.lineTo(x + 0.5, contentH);
+        ctx.stroke();
+        if (x > THREAD_LABEL_W && w - x >= 55) {
+          ctx.fillStyle = PLOT_BG;
+          ctx.fillRect(x + 2, 1, 52, RULER_H - 2);
+          ctx.fillStyle = '#cbd5e1';
+          ctx.fillText(`#${boundary.frameIndex}`, x + 5, RULER_H / 2);
+        }
+      }
+    }
+  }, [context, visibleThreads, selected, labelStyle]);
 
   useEffect(() => {
     draw();
@@ -193,7 +320,7 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
     if (!wrap) return null;
     const rect = wrap.getBoundingClientRect();
     return hitTest(
-      layout.threads,
+      visibleThreads,
       clientX - rect.left,
       clientY - rect.top + wrap.scrollTop,
       THREAD_LABEL_W,
@@ -202,26 +329,87 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
     );
   };
 
-  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (e.cancelable) e.preventDefault();
+  const hover = (() => {
+    const wrap = wrapRef.current;
+    if (!pointer || !wrap) return null;
+    const rect = wrap.getBoundingClientRect();
+    const x = pointer.clientX - rect.left;
+    const y = pointer.clientY - rect.top;
+    if (y < 0 || y >= wrap.clientHeight) return null;
+    const bar = pick(pointer.clientX, pointer.clientY);
+    if (!bar || bar.id === selected) return null;
+    const width = Math.min(280, wrap.clientWidth);
+    return {
+      bar,
+      width,
+      left: Math.max(0, Math.min(x + 12, wrap.clientWidth - width)),
+      top: wrap.scrollTop + (y + 40 <= wrap.clientHeight ? y + 12 : Math.max(0, y - 36)),
+    };
+  })();
+
+  const pinned = (() => {
+    const wrap = wrapRef.current;
+    if (!selectedBar || !wrap) return null;
+    const lane = laneControls.find(({ thread }) => thread.bars.some((bar) => bar.id === selectedBar.id));
+    if (!lane || selectedBar.depth > lane.thread.maxDepth) return null;
+    const bounds = projectSample(selectedBar, plotW(), win);
+    if (!bounds) return null;
+    const width = Math.min(280, wrap.clientWidth);
+    const y = barY(lane.top, selectedBar.depth);
+    const below = y + BAR_H + 4;
+    return {
+      width,
+      left: Math.max(0, Math.min(THREAD_LABEL_W + bounds.left, wrap.clientWidth - width)),
+      top: below + 26 <= laneControls[laneControls.length - 1].bottom ? below : Math.max(0, y - 28),
+    };
+  })();
+
+  const neighborAt = (clientX: number) => {
+    const wrap = wrapRef.current;
+    if (!wrap || !onSelectNeighbor) return undefined;
+    const plotX = clientX - wrap.getBoundingClientRect().left - THREAD_LABEL_W;
+    const width = plotW();
+    if (plotX < 0 || plotX >= width) return undefined;
+    const time = msFromX(plotX, width, winRef.current);
+    return context.find((candidate) => !candidate.selected && time >= candidate.offsetMs && time < candidate.offsetMs + candidate.durationMs);
+  };
+
+  useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
-    const rect = wrap.getBoundingClientRect();
-    const x = e.clientX - rect.left - THREAD_LABEL_W;
-    const anchor = msFromX(Math.max(0, x), plotW(), winRef.current);
-    if (e.shiftKey || e.deltaX) {
-      const dx = e.deltaX || e.deltaY;
-      setWin((cur) => panWindow(cur, layout.totalMs, panDeltaFromPixels(-dx, plotW(), cur)));
-      return;
-    }
-    setWin((cur) => zoomWindow(cur, layout.totalMs, wheelZoomFactor(e.deltaY), anchor));
+    const onWheel = (event: WheelEvent) => {
+      const x = event.clientX - wrap.getBoundingClientRect().left - THREAD_LABEL_W;
+      if (x < 0 && !event.shiftKey && !event.deltaX) return;
+      event.preventDefault();
+      const width = Math.max(1, wrap.clientWidth - THREAD_LABEL_W);
+      if (event.shiftKey || event.deltaX) {
+        const delta = event.deltaX || event.deltaY;
+        setWin((cur) => panWindow(cur, layout.totalMs, panDeltaFromPixels(-delta, width, cur), layout.startMs));
+        return;
+      }
+      const factor = wheelZoomFactor(event.deltaY);
+      setWin((cur) => zoomWindow(cur, layout.totalMs, factor, msFromX(x, width, cur), layout.startMs));
+    };
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    return () => wrap.removeEventListener('wheel', onWheel);
+  }, [layout.startMs, layout.totalMs]);
+
+  const focusSample = (bar: TimelineBar | null) => {
+    setWin(bar ? zoomToBar(bar, layout.totalMs, layout.startMs) : fit);
   };
+
+  const changeLaneDepth = (id: string, depth: number) => {
+    setVisibleDepths((current) => ({ ...current, [id]: depth }));
+  };
+
+  const visibleEnd = win.startMs + win.spanMs;
+  const maxTime = layout.startMs + fitWindow(layout.totalMs, layout.startMs).spanMs;
 
   return (
     <div className="cpu-timeline" data-testid="cpu-timeline">
       <div className="sr-only" data-testid="cpu-timeline-threads">
         {layout.threads.map((th) => (
-          <span key={th.name}>{th.name}</span>
+          <span key={th.bars[0].id}>{th.name}</span>
         ))}
       </div>
       <div
@@ -233,90 +421,222 @@ export function CpuTimeline({ frame, hierarchy }: Props) {
       />
       <div
         ref={wrapRef}
-        className="cpu-timeline-plot"
+        className={panning ? 'cpu-timeline-plot is-panning' : 'cpu-timeline-plot'}
         data-testid="cpu-timeline-plot"
-        title="滚轮缩放，拖拽平移，双击放大采样"
-        onWheel={onWheel}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          const key = event.key.toLowerCase();
+          if (key !== 'a' && key !== 'f') return;
+          event.preventDefault();
+          event.stopPropagation();
+          focusSample(key === 'f' ? selectedBar : null);
+        }}
+        onContextMenu={(event) => { if (event.altKey) event.preventDefault(); }}
         onPointerDown={(e) => {
-          if (e.button !== 0 && e.button !== 1) return;
+          if (drag.current) return;
+          if (e.button !== 0 && e.button !== 1 && !(e.altKey && e.button === 2)) return;
+          if (e.button === 1) {
+            e.preventDefault();
+            setPanning(true);
+            setPointer(null);
+          }
+          e.currentTarget.focus({ preventScroll: true });
           (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
           drag.current = {
             pointerId: e.pointerId,
             startX: e.clientX,
+            startY: e.clientY,
+            scrollTop: e.currentTarget.scrollTop,
+            mode: e.button === 2 ? 'zoom' : e.button === 1 ? 'pan' : 'select',
             startWin: winRef.current,
             moved: false,
           };
         }}
         onPointerMove={(e) => {
-          const hit = pick(e.clientX, e.clientY);
-          const wrap = wrapRef.current;
-          if (wrap && hit) {
-            const rect = wrap.getBoundingClientRect();
-            setHover({ bar: hit, x: e.clientX - rect.left, y: e.clientY - rect.top + wrap.scrollTop });
-          } else {
-            setHover(null);
-          }
           const d = drag.current;
-          if (!d || d.pointerId !== e.pointerId) return;
+          if (!d) {
+            setPointer({ clientX: e.clientX, clientY: e.clientY });
+            return;
+          }
+          if (d.pointerId !== e.pointerId) return;
           const dx = e.clientX - d.startX;
-          if (Math.abs(dx) > 3) d.moved = true;
+          const dy = e.clientY - d.startY;
+          if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
           if (!d.moved) return;
-          setWin(panWindow(d.startWin, layout.totalMs, panDeltaFromPixels(dx, plotW(), d.startWin)));
+          setPointer(null);
+          if (d.mode === 'zoom') {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const anchor = msFromX(Math.max(0, d.startX - rect.left - THREAD_LABEL_W), plotW(), d.startWin);
+            setWin(zoomWindow(d.startWin, layout.totalMs, Math.exp(-dx / 160), anchor, layout.startMs));
+            return;
+          }
+          if (d.mode !== 'pan') return;
+          e.currentTarget.scrollTop = d.scrollTop - dy;
+          setWin(panWindow(d.startWin, layout.totalMs, panDeltaFromPixels(dx, plotW(), d.startWin), layout.startMs));
         }}
         onPointerUp={(e) => {
           const d = drag.current;
+          if (!d || d.pointerId !== e.pointerId) return;
           drag.current = null;
+          setPanning(false);
           try {
             e.currentTarget.releasePointerCapture?.(e.pointerId);
           } catch {
             // capture 可能已释放
           }
-          if (d?.moved) return;
+          if (d.moved || d.mode !== 'select') return;
+          if (Math.abs(e.clientX - d.startX) > 3 || Math.abs(e.clientY - d.startY) > 3) return;
+          setPointer({ clientX: e.clientX, clientY: e.clientY });
+          const neighbor = neighborAt(e.clientX);
+          if (neighbor) {
+            pendingNeighbor.current = neighbor;
+            onSelectNeighbor?.(neighbor);
+            return;
+          }
           const hit = pick(e.clientX, e.clientY);
           setSelected(hit?.id ?? '');
         }}
         onPointerCancel={() => {
           drag.current = null;
+          setPanning(false);
+          setPointer(null);
         }}
+        onLostPointerCapture={(event) => {
+          if (drag.current?.pointerId !== event.pointerId) return;
+          drag.current = null;
+          setPanning(false);
+        }}
+        onPointerLeave={() => setPointer(null)}
+        onScroll={() => setPointer(null)}
         onDoubleClick={(e) => {
+          if (neighborAt(e.clientX)) return;
           const hit = pick(e.clientX, e.clientY);
-          if (!hit) {
-            setWin(fitWindow(layout.totalMs));
-            return;
-          }
+          if (!hit) return;
           setSelected(hit.id);
-          setWin(zoomToBar(hit, layout.totalMs));
+          focusSample(hit);
         }}
       >
         <canvas ref={canvasRef} />
+        {laneControls.map(({ thread, top, bottom, maxDepth }) => maxDepth > 0 && (
+          <div key={thread.id}>
+            <button type="button" className="cpu-timeline-fold" style={{ top: top + 3 }}
+              aria-label={`${thread.name}采样层级`} aria-expanded={thread.maxDepth > 0}
+              onPointerDown={(event) => { if (event.button === 0) event.stopPropagation(); }}
+              onPointerUp={(event) => { if (event.button === 0) event.stopPropagation(); }}
+              onDoubleClick={(event) => event.stopPropagation()}
+              onClick={() => changeLaneDepth(thread.id, thread.maxDepth > 0 ? 0 : maxDepth)}>
+              {thread.maxDepth > 0 ? '▾' : '▸'}
+            </button>
+            <div className="cpu-timeline-lane-grip" style={{ top: bottom - 2 }}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.stopPropagation();
+                event.currentTarget.setPointerCapture?.(event.pointerId);
+                resize.current = { thread: thread.id, startY: event.clientY, depth: thread.maxDepth };
+              }}
+              onPointerMove={(event) => {
+                if (resize.current?.thread !== thread.id) return;
+                const depth = resize.current.depth + Math.round((event.clientY - resize.current.startY) / (BAR_H + BAR_GAP));
+                changeLaneDepth(thread.id, Math.max(0, Math.min(maxDepth, depth)));
+              }}
+              onPointerUp={(event) => {
+                if (resize.current?.thread !== thread.id) return;
+                event.stopPropagation();
+                resize.current = null;
+              }}
+              onPointerCancel={() => { resize.current = null; }}
+              onDoubleClick={(event) => { event.stopPropagation(); changeLaneDepth(thread.id, maxDepth); }} />
+          </div>
+        ))}
+        {pinned && selectedBar && (
+          <div className="cpu-timeline-tip" data-testid="cpu-timeline-pinned-tip"
+            style={{ left: pinned.left, top: pinned.top, maxWidth: pinned.width }}>
+            <strong>{selectedBar.name}</strong>
+            <span className="mono">{formatMs(selectedBar.durationMs)}</span>
+          </div>
+        )}
         {hover && (
           <div
             className="cpu-timeline-tip"
             data-testid="cpu-timeline-tip"
-            style={{ left: Math.min(hover.x + 12, (wrapRef.current?.clientWidth ?? 0) - 8), top: hover.y + 12 }}
+            role="tooltip"
+            style={{ left: hover.left, top: hover.top, maxWidth: hover.width }}
           >
             <strong>{hover.bar.name}</strong>
             <span className="mono">{formatMs(hover.bar.durationMs)}</span>
           </div>
         )}
       </div>
-      <div className="cpu-timeline-status" data-testid="cpu-timeline-status">
-        {selectedBar ? (
-          <>
+      {layout.threads.length > 0 && (
+        <div className="cpu-timeline-range" aria-label="Timeline 可见范围">
+          <div
+            className="cpu-timeline-range-window"
+            data-testid="cpu-timeline-range-window"
+            style={{
+              left: `${100 * (win.startMs - layout.startMs) / (maxTime - layout.startMs)}%`,
+              right: `${100 * (maxTime - visibleEnd) / (maxTime - layout.startMs)}%`,
+            }}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+              rangeDrag.current = { pointerId: event.pointerId, startX: event.clientX, startWin: winRef.current };
+            }}
+            onPointerMove={(event) => {
+              const active = rangeDrag.current;
+              const width = event.currentTarget.parentElement?.clientWidth ?? 0;
+              if (!active || active.pointerId !== event.pointerId || width === 0) return;
+              const delta = (event.clientX - active.startX) * (maxTime - layout.startMs) / width;
+              setWin(panWindow(active.startWin, layout.totalMs, delta, layout.startMs));
+            }}
+            onLostPointerCapture={() => { rangeDrag.current = null; }}
+            onPointerUp={() => { rangeDrag.current = null; }}
+            onPointerCancel={() => { rangeDrag.current = null; }}
+          />
+          <input type="range" aria-label="可见范围起点" min={layout.startMs} max={maxTime} step="any" value={win.startMs}
+            onChange={(event) => {
+              const startMs = Math.min(Number(event.target.value), visibleEnd - MIN_SPAN_MS);
+              setWin({ startMs, spanMs: visibleEnd - startMs });
+            }} />
+          <input type="range" aria-label="可见范围终点" min={layout.startMs} max={maxTime} step="any" value={visibleEnd}
+            onChange={(event) => setWin({ ...win, spanMs: Math.max(MIN_SPAN_MS, Number(event.target.value) - win.startMs) })} />
+        </div>
+      )}
+      {selectedBar && (
+        <>
+          <div className="cpu-timeline-status" data-testid="cpu-timeline-status">
             <span className="swatch" style={{ background: selectedBar.color }} />
             <span className="cpu-timeline-status-name" title={selectedBar.name}>{selectedBar.name}</span>
             <span className="mono dim">{formatMs(selectedBar.durationMs)}</span>
             <span className="mono dim">{formatMs(selectedBar.startMs)}–{formatMs(barEnd(selectedBar))}</span>
-          </>
-        ) : (
-          <span className="dim">滚轮缩放 · 拖拽平移 · 单击选中 · 双击放大</span>
-        )}
+            {selectedBar.selfMs !== undefined && <span className="mono dim">自身 {formatMs(selectedBar.selfMs)} · {selectedBar.calls} 次</span>}
+          </div>
+          <section className="cpu-sample-stack" aria-label="采样调用栈">
+            <code title={selectedBar.path}>{selectedBar.samplePath?.join(' › ') ?? selectedBar.path}</code>
+            {selectedBar.callstack?.length ? (
+              <pre>{selectedBar.callstack.join('\n')}</pre>
+            ) : <small className="dim">该采样没有上报符号调用栈</small>}
+          </section>
+        </>
+      )}
+      <div className="cpu-timeline-status" data-testid="cpu-timeline-footer">
+        <span className="dim">{layout.threads.length > 0
+          ? '左键选中采样或切换灰色帧 · 中键拖拽平移 · 滚轮缩放 · 双击放大 · A 适应整帧 · F 聚焦采样'
+          : '此帧暂无带时间戳的 CPU 采样'}</span>
+        <select className="cpu-timeline-label-style" aria-label="采样条样式" value={labelStyle}
+          onChange={(event) => {
+            const next = event.target.value === 'unity' ? 'unity' : 'split';
+            setLabelStyle(next);
+            try { localStorage.setItem(labelStyleKey, next); } catch { return; }
+          }}>
+          <option value="split">耗时分列</option>
+          <option value="unity">Unity 合并显示</option>
+        </select>
         <button
           type="button"
           className="btn ghost cpu-timeline-fit"
           aria-label="适应窗口"
           title="适应窗口"
-          onClick={() => setWin(clampWindow(fitWindow(layout.totalMs), layout.totalMs))}
+          onClick={() => focusSample(null)}
         >
           适应
         </button>

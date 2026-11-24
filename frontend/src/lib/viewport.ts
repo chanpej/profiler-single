@@ -1,6 +1,6 @@
 /** Unity Profiler 风格时间轴视口：可见窗口、跟随最新帧、缩放与平移。 */
 
-export const MIN_VISIBLE = 300;
+export const MIN_VISIBLE = 1;
 export const MAX_VISIBLE = 4000;
 export const DEFAULT_VISIBLE = 300;
 
@@ -54,7 +54,8 @@ export function clampViewport(vp: Viewport, total: number): Viewport {
  * 跟随时钉住右缘（最新帧）；否则围绕 anchor 帧缩放。
  */
 export function zoomViewport(vp: Viewport, total: number, factor: number, anchor: number): Viewport {
-  const visible = clampVisible(Math.round(vp.visible * factor), total);
+  const scaled = vp.visible * factor;
+  const visible = clampVisible(factor < 1 ? Math.floor(scaled) : Math.ceil(scaled), total);
   if (visible === vp.visible) return clampViewport(vp, total);
   if (vp.follow) {
     return clampViewport({ ...vp, visible }, total);

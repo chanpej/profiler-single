@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"unityperfagent/internal/profileframe"
+	"unityperf/internal/profileframe"
 )
 
 func TestReplayRebuildsHierarchyFromRaw(t *testing.T) {

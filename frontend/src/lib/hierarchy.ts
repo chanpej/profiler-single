@@ -90,21 +90,33 @@ export function mergeExpanded(
   return next;
 }
 
-export function categoryColor(category: string): string {
-  switch (category) {
-    case 'Render': return '#2E8B4A';
-    case 'Scripts': return '#3B6CB5';
-    case 'Physics':
-    case 'Physics2D': return '#8E44AD';
-    case 'Animation': return '#D35400';
-    case 'GC': return '#A0522D';
-    case 'VSync': return '#7F8C8D';
-    case 'Gui':
-    case 'UI Layout':
-    case 'UI Render':
-    case 'UI Details': return '#C9A227';
-    default: return '#5D6D7E';
-  }
+const timelineColors = new Map<string, string>([
+  ['Render', '#7B9E05'],
+  ['VFX', '#7B9E05'],
+  ['Scripts', '#3488A7'],
+  ['Managed Jobs', '#3488A7'],
+  ['Physics', '#CC7000'],
+  ['Animation', '#5AB2BC'],
+  ['GC', '#72680C'],
+  ['GarbageCollector', '#72680C'],
+  ['VSync', '#C5A206'],
+  ['Lighting', '#882807'],
+  ['UI Layout', '#614985'],
+  ['UI Render', '#614985'],
+  ['Other', '#7A7B1E'],
+  ['Audio', '#50A05D'],
+  ['Audio Job', '#7142B7'],
+  ['Audio Update Job', '#A242B7'],
+  ['Memory', '#B2194C'],
+  ['Internal', '#646464'],
+  ['Burst Jobs', '#2ECC71'],
+  ['Build Interface', '#4EC9B0'],
+  ['Input', '#4EC9F0'],
+]);
+
+export function categoryColor(category: string, sampleName?: string): string {
+  if (sampleName === 'GC.Alloc') return timelineColors.get('Memory')!;
+  return timelineColors.get(category) ?? timelineColors.get('Other')!;
 }
 
 /**

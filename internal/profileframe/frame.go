@@ -3,7 +3,7 @@
 // are normalized into Frame before reaching the session store.
 package profileframe
 
-import "unityperfagent/internal/protocol"
+import "unityperf/internal/protocol"
 
 // Frame is one fully decoded Unity Profiler frame.
 //
@@ -11,8 +11,12 @@ import "unityperfagent/internal/protocol"
 // MainThread contains the unmerged CPU sample forest for the Main Thread; the
 // frontend performs Unity-style hierarchy merging only when rendering it.
 type Frame struct {
-	Summary    protocol.FrameData
-	MainThread []protocol.SampleNode
+	Summary       protocol.FrameData
+	MainThread    []protocol.SampleNode
+	Timeline      *Timeline
+	PlayerStartNS int64
+	PlayerEndNS   int64
+	ClockEpoch    int
 }
 
 // New combines a frame summary and its Main Thread samples into the common

@@ -3,7 +3,7 @@ package profileframe
 import (
 	"testing"
 
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/protocol"
 )
 
 func TestNewCombinesSummaryAndMainThread(t *testing.T) {

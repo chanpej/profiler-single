@@ -1,0 +1,21 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { ScreenFilmstrip } from './ScreenFilmstrip';
+
+it('uses the viewport to fetch screenshots and selects the associated frame', async () => {
+  const shot = { id: '100', frame: 12, image: 'aW1hZ2U=', deltaMs: 42, captureMs: 180 };
+  const sameImage = { ...shot, id: '200', frame: 16 };
+  const fetchStrip = vi.fn(async () => ({ enabled: true, available: true, error: '', thumbnails: [shot, sameImage], selected: shot }));
+  const onSelect = vi.fn();
+  render(<ScreenFilmstrip fetchStrip={fetchStrip} setCapture={vi.fn()} connected start={10} count={10} selected={12} onSelect={onSelect} />);
+  fireEvent.click(screen.getByRole('button', { name: '画面轨道' }));
+  const thumbnail = await screen.findByRole('button', { name: '跳到采集帧 13' });
+  expect(thumbnail).toHaveClass('is-selected');
+  expect(screen.getByRole('button', { name: '跳到采集帧 17' })).not.toHaveClass('is-selected');
+  await waitFor(() => expect(fetchStrip).toHaveBeenCalledWith(10, 10, 12));
+  fireEvent.click(thumbnail);
+  expect(onSelect).toHaveBeenCalledWith(12);
+  fireEvent.click(screen.getByRole('button', { name: '预览选中帧' }));
+  expect(screen.getByAltText('选中帧附近的手机画面')).toHaveAttribute('src', 'data:image/jpeg;base64,aW1hZ2U=');
+  expect(screen.getByText(/估算偏移 \+42 ms/)).toBeInTheDocument();
+});

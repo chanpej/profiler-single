@@ -7,12 +7,18 @@ import (
 )
 
 // SupportedUnityMajor 是当前支持的 Unity 大版本。
-// UnityPerfAgent 目前只支持 Unity 2022，其他版本暂不考虑。
+// unityperf 目前只支持 Unity 2022，其他版本暂不考虑。
 const SupportedUnityMajor = "2022"
 
 // Unity2022StreamVersion 是 Unity 2022 Profiler 数据流的格式版本戳。
 // 改装引擎会自报别的版本号，因此兼容性以数据流格式为准。
 const Unity2022StreamVersion uint32 = 0x20220328
+
+const Tuanjie2022StreamVersion uint32 = 0x20230224
+
+func IsSupportedProfilerVersion(version uint32) bool {
+	return version == Unity2022StreamVersion || version == Tuanjie2022StreamVersion
+}
 
 // Handshake 是设备接入时上报的基本信息，Payload 为 JSON 编码。
 type Handshake struct {
@@ -42,7 +48,7 @@ func IsSupportedUnityVersion(version string) bool {
 // 版本号，但数据流仍是 Unity 2022 格式，能正常解析。数据流版本未知时才退回看版本号。
 func (h Handshake) Supported() bool {
 	if h.ProfilerStreamVersion != 0 {
-		return h.ProfilerStreamVersion == Unity2022StreamVersion
+		return IsSupportedProfilerVersion(h.ProfilerStreamVersion)
 	}
 	return IsSupportedUnityVersion(h.UnityVersion)
 }

@@ -69,6 +69,16 @@ function renderBar(override: Partial<ComponentProps<typeof ConnectBar>> = {}) {
 }
 
 describe('ConnectBar', () => {
+  it('connects by phone IP from the default Mini Game waiting state', async () => {
+    const onDirect = vi.fn();
+    renderBar({ status: { ...disconnected, transport: 'autoconnect', reconnecting: true }, onDirect });
+    const button = screen.getByRole('button', { name: 'IP 直连' });
+    expect(button).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('手机 IP'), ' 192.168.0.42 ');
+    await userEvent.click(button);
+    expect(onDirect).toHaveBeenCalledWith('192.168.0.42');
+  });
+
   it('shows package input and USB button when disconnected', () => {
     renderBar({ packageId: 'com.company.game' });
     expect(screen.getByLabelText(LABEL_PACKAGE)).toBeInTheDocument();
@@ -98,6 +108,46 @@ describe('ConnectBar', () => {
     renderBar({ packageId: 'com.company.game', onUSB });
     await userEvent.click(screen.getByRole('button', { name: BTN_USB }));
     expect(onUSB).toHaveBeenCalled();
+  });
+
+  it('starts Mini Game autoconnect without an Android package ID', async () => {
+    const onAutoconnect = vi.fn();
+    renderBar({ onAutoconnect, autoconnectAddresses: ['192.168.0.42', '10.0.0.8'] });
+    const button = screen.getByRole('button', { name: '开启小游戏监听' });
+    expect(button).toHaveClass('minigame-listener-button');
+    expect(button.nextElementSibling).toHaveTextContent('本机 IP 192.168.0.42 / 10.0.0.8');
+    await userEvent.click(button);
+    expect(onAutoconnect).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('offers a close button while the Mini Game port is listening (connected: %s)', async (isConnected) => {
+    const onDisconnect = vi.fn();
+    renderBar({
+      status: { ...connected, connected: isConnected, reconnecting: !isConnected, transport: 'autoconnect' },
+      onDisconnect,
+    });
+    const button = screen.getByRole('button', { name: '关闭小游戏监听' });
+    expect(button).toHaveClass('minigame-listener-button');
+    await userEvent.click(button);
+    expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the address visible while waiting for the Mini Game', () => {
+    renderBar({
+      status: { ...usbConnected, connected: false, reconnecting: true, transport: 'autoconnect' },
+      autoconnectAddresses: ['192.168.0.42'],
+      packageId: 'com.company.game',
+    });
+    expect(screen.getByText(/等待小游戏连接/)).toBeInTheDocument();
+    expect(screen.getByText('192.168.0.42')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: BTN_USB })).toBeEnabled();
+  });
+
+  it('opens Unity logs from the connection toolbar', async () => {
+    const onUnityLogs = vi.fn();
+    renderBar({ onUnityLogs });
+    await userEvent.click(screen.getByRole('button', { name: 'Unity 日志' }));
+    expect(onUnityLogs).toHaveBeenCalledOnce();
   });
 
   it('package input triggers change callback', async () => {

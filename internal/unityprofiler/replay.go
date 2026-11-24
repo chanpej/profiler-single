@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 // ErrNoStreamHeader 表示存档里没有 PD3U 流头，无法解码。
@@ -65,23 +65,32 @@ func ReplayFramesWithProgress(chunks [][]byte, progress ReplayProgress) (frames 
 			h.FormatVersion, protocol.SupportedUnityMajor, Unity2022StreamVersion)
 	}
 
-	dec := NewDecoder(func(snap FrameSnapshot) {
-		frames = append(frames, ToMemoryFrame(snap))
-	})
+	epoch := 0
+	onFrame := func(snap FrameSnapshot) {
+		frame := ToMemoryFrame(snap)
+		frame.ClockEpoch = epoch
+		frames = append(frames, frame)
+	}
+	dec := NewDecoder(onFrame)
 	report(0)
 	for i, c := range chunks {
-		if ferr := dec.Feed(c); ferr != nil {
-			st := dec.Stats()
-			if st.Desynced {
-				return nil, fmt.Errorf("Profiler 数据流解析失步（分块 %d）：%s", i, st.LastError)
+		if IsStreamHeader(c) {
+			header, _ := ParseStreamHeader(c)
+			if !IsSupportedStreamVersion(header.FormatVersion) {
+				return nil, fmt.Errorf("Profiler 数据流格式 %#x 不受支持", header.FormatVersion)
 			}
+			if epoch > 0 {
+				dec = NewDecoder(onFrame)
+			}
+			epoch++
+		}
+		_ = dec.Feed(c)
+		if dec.stats.Desynced {
+			return nil, fmt.Errorf("Profiler 数据流解析失步（分块 %d）：%s", i, dec.stats.LastError)
 		}
 		report(i + 1)
 	}
 	st := dec.Stats()
-	if st.Desynced {
-		return nil, fmt.Errorf("Profiler 数据流解析失步：%s", st.LastError)
-	}
 	if len(frames) == 0 {
 		reason := st.LastError
 		if reason == "" && st.DroppedChunks > 0 {

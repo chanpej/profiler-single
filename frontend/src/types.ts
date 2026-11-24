@@ -21,6 +21,7 @@ export interface FrameData {
   cpuPhysicsMs: number;
   cpuAnimationMs: number;
   cpuGcMs: number;
+  cpuLightingMs?: number;
   cpuVsyncMs: number;
   cpuUiMs: number;
   cpuOthersMs: number;
@@ -58,6 +59,42 @@ export interface FrameData {
   colliders: number;
   uiBatches: number;
   uiVertices: number;
+}
+
+export interface CpuThreadSamples {
+  id: string;
+  name: string;
+  offsetMs: number;
+  samples: SampleNode[];
+}
+
+export interface CpuTimelineFrame {
+  frameIndex: number;
+  offsetMs: number;
+  durationMs: number;
+  selected: boolean;
+  threads: CpuThreadSamples[];
+}
+
+export interface FrameRange {
+  start: number;
+  end: number;
+}
+
+export interface HeavySample {
+  name: string;
+  category: string;
+  calls: number;
+  totalMs: number;
+  selfMs: number;
+  children?: HeavySample[];
+}
+
+export interface HeavyProfile {
+  firstFrame: number;
+  lastFrame: number;
+  frameCount: number;
+  threads: { id: string; name: string; roots: HeavySample[]; functions: HeavySample[] }[] | null;
 }
 
 export interface SampleNode {
@@ -155,30 +192,6 @@ export interface Status {
   hasRaw?: boolean;
 }
 
-export interface AgentProfile {
-  id: string;
-  name: string;
-  command: string;
-  args: string[];
-  workDir: string;
-  model: string;
-  effort: string;
-}
-
-export interface LLMConfig {
-  activeId: string;
-  agents: AgentProfile[];
-  agentCommand: string;
-  agentArgs: string[];
-  workDir: string;
-}
-
-export interface ProbeResult {
-  ok: boolean;
-  name: string;
-  message: string;
-}
-
 export interface TickEvent {
   totalFrames: number;
   retained: number;
@@ -194,21 +207,7 @@ export interface ImportProgressEvent {
   fileName: string;
 }
 
-export interface AgentModelOption {
-  id: string;
-  label: string;
-}
-
-/** 一条 Agent 或嵌入式 MCP Server 的完整交互记录。 */
-export interface AgentLogEntry {
-  time: string;
-  source: string;
-  direction: string;
-  method: string;
-  payload: string;
-}
-
-export type OverlayId = 'frames' | 'analysis' | 'settings';
+export type OverlayId = 'frames' | 'analysis' | 'logs';
 
 export type ProfilerModuleId =
   | 'cpu'

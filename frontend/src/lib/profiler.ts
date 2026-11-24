@@ -1,4 +1,5 @@
 import type { FrameData, ProfilerModuleId } from '../types';
+import { categoryColor } from './hierarchy';
 
 export type SeriesUnit = 'ms' | 'mb' | 'kb' | 'count';
 
@@ -34,7 +35,7 @@ export function gpuOrFrameMs(f: FrameData): number {
 
 function cpuKnownMs(f: FrameData): number {
   return (f.cpuRenderingMs || 0) + (f.cpuScriptsMs || 0) + (f.cpuPhysicsMs || 0)
-    + (f.cpuAnimationMs || 0) + (f.cpuGcMs || 0) + (f.cpuVsyncMs || 0) + (f.cpuUiMs || 0);
+    + (f.cpuAnimationMs || 0) + (f.cpuGcMs || 0) + (f.cpuVsyncMs || 0) + (f.cpuUiMs || 0) + (f.cpuLightingMs || 0);
 }
 
 /**
@@ -48,14 +49,15 @@ export function cpuOthersMs(f: FrameData): number {
 
 /** CPU Usage 分类色：对齐 Unity Profiler CPU 模块。 */
 export const CPU_CATEGORIES: CategoryDef[] = [
-  { id: 'rendering', label: 'Rendering', color: '#2E8B4A', unit: 'ms', get: (f) => f.cpuRenderingMs },
-  { id: 'scripts', label: 'Scripts', color: '#3B6CB5', unit: 'ms', get: (f) => f.cpuScriptsMs },
-  { id: 'physics', label: 'Physics', color: '#8E44AD', unit: 'ms', get: (f) => f.cpuPhysicsMs },
-  { id: 'animation', label: 'Animation', color: '#D35400', unit: 'ms', get: (f) => f.cpuAnimationMs },
-  { id: 'gc', label: 'GC', color: '#A0522D', unit: 'ms', get: (f) => f.cpuGcMs },
-  { id: 'vsync', label: 'VSync', color: '#7F8C8D', unit: 'ms', get: (f) => f.cpuVsyncMs },
-  { id: 'ui', label: 'UI', color: '#C9A227', unit: 'ms', get: (f) => f.cpuUiMs },
-  { id: 'others', label: 'Others', color: '#5D6D7E', unit: 'ms', get: (f) => cpuOthersMs(f) },
+  { id: 'rendering', label: 'Rendering', color: categoryColor('Render'), unit: 'ms', get: (f) => f.cpuRenderingMs },
+  { id: 'scripts', label: 'Scripts', color: categoryColor('Scripts'), unit: 'ms', get: (f) => f.cpuScriptsMs },
+  { id: 'physics', label: 'Physics', color: categoryColor('Physics'), unit: 'ms', get: (f) => f.cpuPhysicsMs },
+  { id: 'animation', label: 'Animation', color: categoryColor('Animation'), unit: 'ms', get: (f) => f.cpuAnimationMs },
+  { id: 'gc', label: 'GarbageCollector', color: categoryColor('GC'), unit: 'ms', get: (f) => f.cpuGcMs },
+  { id: 'vsync', label: 'VSync', color: categoryColor('VSync'), unit: 'ms', get: (f) => f.cpuVsyncMs },
+  { id: 'lighting', label: 'Global Illumination', color: categoryColor('Lighting'), unit: 'ms', get: (f) => f.cpuLightingMs || 0 },
+  { id: 'ui', label: 'UI', color: categoryColor('UI Layout'), unit: 'ms', get: (f) => f.cpuUiMs },
+  { id: 'others', label: 'Others', color: categoryColor('Other'), unit: 'ms', get: (f) => cpuOthersMs(f) },
 ];
 
 // 与后端 protocol.MemoryCounter* 常量一致。掩码缺省代表旧采集，数值仍按可用显示。

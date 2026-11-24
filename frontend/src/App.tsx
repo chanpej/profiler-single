@@ -5,14 +5,8 @@ import { captureDialogs } from './lib/captureDialog';
 import { loadPackageId, savePackageId } from './lib/packageIdStorage';
 import { createWindowControls } from './lib/window';
 import { formatErrorMessage, isUserCancelled } from './lib/userCancel';
-import { loadAgentCollapsed, loadAgentWidth, saveAgentCollapsed } from './lib/agentPanel';
-import { applyChatFontSize, loadChatFontSize } from './lib/chatAppearance';
-import { emptyLLMConfig, isAgentConfigured, normalizeLLMConfig, updateAgent, withActiveAgent } from './lib/llmConfig';
-import { applyLLMRuntime, loadLLMRuntime, saveLLMRuntime } from './lib/llmRuntimeStorage';
-import { chooseAgentChatExportPath } from './lib/agentChatExport';
-import type { AgentChatReference } from './lib/agentChatReferences';
 import { initialImportProgress } from './lib/importProgress';
-import type { AgentProfile, ImportProgressEvent, LLMConfig, OverlayId, Stats, Status } from './types';
+import type { ImportProgressEvent, OverlayId, Stats, Status } from './types';
 import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
 import { AppDialog } from './components/AppDialog';
@@ -21,10 +15,9 @@ import { ProgressPopup } from './components/ProgressPopup';
 import { ConnectBar } from './components/ConnectBar';
 import { FrameTable } from './components/FrameTable';
 import { AnalysisView } from './components/AnalysisView';
-import { SettingsView } from './components/SettingsView';
 import { ProfilerView } from './components/ProfilerView';
-import { AgentChatPanel } from './components/AgentChatPanel';
 import { StatusBar } from './components/StatusBar';
+import { UnityLogView } from './components/UnityLogView';
 
 const LIVE_REFRESH_MS = 200;
 const IDLE_REFRESH_MS = 500;
@@ -45,7 +38,7 @@ const emptyStatus: Status = {
 const overlayTitle: Record<OverlayId, string> = {
   frames: '帧数据',
   analysis: '诊断',
-  settings: '设置',
+  logs: 'Unity 日志',
 };
 
 const windowControls = createWindowControls(Window as unknown as import('./lib/window').WindowAPI);
@@ -56,13 +49,9 @@ function App() {
   const [, setStats] = useState<Stats | null>(null);
   const [busy, setBusy] = useState(false);
   const [packageId, setPackageId] = useState(loadPackageId);
+  const [autoconnectAddresses, setAutoconnectAddresses] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [importProgress, setImportProgress] = useState<ImportProgressEvent | null>(null);
-  const [llm, setLlm] = useState<LLMConfig>(() => applyLLMRuntime(emptyLLMConfig, loadLLMRuntime()));
-  const [agentCollapsed, setAgentCollapsed] = useState(loadAgentCollapsed);
-  const [agentWidth, setAgentWidth] = useState(loadAgentWidth);
-  const [pendingChatReference, setPendingChatReference] = useState<{ id: number; reference: AgentChatReference } | null>(null);
-  const referenceSequence = useRef(0);
   const lastRefresh = useRef(0);
   const statusRef = useRef(status);
   const shownLastError = useRef('');
@@ -76,14 +65,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    applyChatFontSize(loadChatFontSize());
     refresh().catch(() => {});
-    api.llmConfig().then(async (cfg) => {
-      const next = applyLLMRuntime(cfg, loadLLMRuntime());
-      setLlm(next);
-      saveLLMRuntime(next);
-      await api.setLLMConfig(next);
-    }).catch(() => {});
     const offTick = api.onTick(() => {
       const now = Date.now();
       const live = statusRef.current.connected && statusRef.current.recording !== false;
@@ -113,6 +95,22 @@ function App() {
     }
   }, [status.lastError]);
 
+  useEffect(() => {
+    let request = 0;
+    const refreshAddresses = () => {
+      const current = ++request;
+      api.autoconnectAddresses().then((addresses) => {
+        if (current === request) setAutoconnectAddresses(addresses);
+      }).catch(() => {});
+    };
+    refreshAddresses();
+    window.addEventListener('focus', refreshAddresses);
+    return () => {
+      request++;
+      window.removeEventListener('focus', refreshAddresses);
+    };
+  }, [status.transport]);
+
   const guard = useCallback(async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -133,39 +131,7 @@ function App() {
   const fetchRange = useCallback((offset: number, limit: number) => api.frames(offset, limit), []);
   const getFrame = useCallback((index: number) => api.frameAt(index), []);
   const getHierarchy = useCallback((index: number) => api.frameHierarchy(index), []);
-  const saveLLM = useCallback(async (cfg: Parameters<typeof api.setLLMConfig>[0]) => {
-    const next = normalizeLLMConfig(cfg);
-    saveLLMRuntime(next);
-    await api.setLLMConfig(next);
-    setLlm(next);
-  }, []);
-
-  const onSelectAgent = useCallback((id: string) => {
-    setLlm((cur) => {
-      const next = withActiveAgent(cur, id);
-      saveLLMRuntime(next);
-      api.setLLMConfig(next).catch(() => {});
-      return next;
-    });
-  }, []);
-
-  const onUpdateAgent = useCallback((patch: Partial<AgentProfile> & { id: string }) => {
-    setLlm((cur) => {
-      const next = updateAgent(cur, patch);
-      saveLLMRuntime(next);
-      api.setLLMConfig(next).catch(() => {});
-      return next;
-    });
-  }, []);
-
-  const onToggleAgent = useCallback(() => {
-    setAgentCollapsed((cur) => {
-      const next = !cur;
-      saveAgentCollapsed(next);
-      return next;
-    });
-  }, []);
-
+  const getTimeline = useCallback((index: number, frameIndex: number) => api.frameTimeline(index, frameIndex), []);
   const recording = status.recording !== false;
   const onToggleRecord = () => {
     if (!status.connected) return;
@@ -192,6 +158,19 @@ function App() {
     const path = await captureDialogs.save();
     if (path) await api.exportCapture(path);
   });
+  const [exportingUnityData, setExportingUnityData] = useState(false);
+  const onExportUnityData = () => guard(async () => {
+    if (exportingUnityData) return;
+    setExportingUnityData(true);
+    try {
+      const path = await captureDialogs.save('data');
+      if (!path) return;
+      const editor = await captureDialogs.pickEditor();
+      if (editor) await api.exportUnityData(path, editor);
+    } finally {
+      setExportingUnityData(false);
+    }
+  });
   const onClear = () => guard(() => api.clear());
   const onDeepProfiling = (on: boolean) => {
     guard(() => api.setDeepProfiling(on));
@@ -199,35 +178,17 @@ function App() {
   const onCallStacks = (on: boolean) => {
     guard(() => api.setCallStacks(on));
   };
-  const onExportAgentChat = useCallback(async (filename: string, content: string) => {
-    try {
-      const path = await chooseAgentChatExportPath(filename);
-      if (path) await api.exportAgentChat(path, content);
-    } catch (e) {
-      if (!isUserCancelled(e)) setError(formatErrorMessage(e));
-    }
-  }, []);
-  const onInsertChatReference = useCallback((reference: AgentChatReference) => {
-    referenceSequence.current += 1;
-    setPendingChatReference({ id: referenceSequence.current, reference });
-    setAgentCollapsed(false);
-  }, []);
-
-  const llmReady = isAgentConfigured(llm);
-
   return (
     <div className="app">
       <TitleBar controls={windowControls} />
       <MenuBar
         onImport={onImport}
         onExport={onExport}
+        onExportUnityData={onExportUnityData}
+        exportingUnityData={exportingUnityData}
         onClear={onClear}
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}
-        onSettings={() => setOverlay('settings')}
-        onOpenAgentLog={() => { api.openAgentLog().catch((e) => setError(formatErrorMessage(e))); }}
-        onToggleAgent={onToggleAgent}
-        agentCollapsed={agentCollapsed}
       />
       <div className="app-body">
         <div className="app-main">
@@ -238,7 +199,11 @@ function App() {
             onPackageIdChange={onPackageIdChange}
             onDisconnect={() => guard(() => api.disconnect())}
             onUSB={() => guard(() => api.connectUSB('', packageId.trim()))}
+            onDirect={(host) => guard(() => api.connectDirect(host))}
+            onAutoconnect={() => guard(() => api.startAutoconnect(37100))}
+            autoconnectAddresses={autoconnectAddresses}
             onClear={onClear}
+            onUnityLogs={() => setOverlay('logs')}
           />
 
           <ProfilerView
@@ -246,6 +211,10 @@ function App() {
             fetchRange={fetchRange}
             getFrame={getFrame}
             getHierarchy={getHierarchy}
+            getTimeline={getTimeline}
+            getHeavyProfile={api.frameHeavyProfile}
+            getScreenshots={api.screenFilmstrip}
+            setScreenCapture={api.setScreenCapture}
             recording={recording}
             connected={status.connected}
             deepProfiling={status.deepProfiling === true}
@@ -257,25 +226,10 @@ function App() {
             onImport={onImport}
             onDeepProfiling={onDeepProfiling}
             onCallStacks={onCallStacks}
-            onInsertReference={onInsertChatReference}
           />
         </div>
-        <AgentChatPanel
-          llm={llm}
-          collapsed={agentCollapsed}
-          width={agentWidth}
-          onToggle={onToggleAgent}
-          onWidthChange={setAgentWidth}
-          onSelectAgent={onSelectAgent}
-          onUpdateAgent={onUpdateAgent}
-          listModels={api.listAgentModels}
-          agentChatSend={api.agentChatSend}
-          onChunk={api.onAgentChunk}
-          exportSession={onExportAgentChat}
-          pendingReference={pendingChatReference}
-        />
       </div>
-      <StatusBar status={status} busy={busy} agentName={llmReady ? (llm.agents.find((a) => a.id === llm.activeId)?.name ?? '') : ''} />
+      <StatusBar status={status} busy={busy} />
 
       <ErrorPopup message={error} open={error !== ''} onClose={() => setError('')} />
       <ProgressPopup progress={importProgress} />
@@ -284,7 +238,7 @@ function App() {
         title={overlay ? overlayTitle[overlay] : ''}
         open={overlay !== null}
         onClose={() => setOverlay(null)}
-        wide={overlay === 'frames' || overlay === 'settings'}
+        wide={overlay === 'frames' || overlay === 'logs'}
       >
         {overlay === 'frames' && (
           <div className="frames-view">
@@ -292,11 +246,9 @@ function App() {
           </div>
         )}
         {overlay === 'analysis' && (
-          <AnalysisView analyze={() => api.analyze()} diagnose={() => api.diagnose()} llmReady={llmReady} />
+          <AnalysisView analyze={api.analyze} />
         )}
-        {overlay === 'settings' && (
-          <SettingsView load={() => api.llmConfig()} save={saveLLM} probe={api.probeAgent} />
-        )}
+        {overlay === 'logs' && <UnityLogView fetchLogs={api.playerLogs} miniGame={status.transport === 'autoconnect'} />}
       </AppDialog>
     </div>
   );

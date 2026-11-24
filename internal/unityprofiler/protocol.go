@@ -117,7 +117,7 @@ func FormatAnnouncement(p PlayerInfo) string {
 	}
 	id := p.ID
 	if id == "" {
-		id = "AndroidPlayer(UnityPerfAgent)"
+		id = "AndroidPlayer(unityperf)"
 	}
 	pkg := p.PackageName
 	if pkg == "" {

@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 const (

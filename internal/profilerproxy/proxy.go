@@ -12,7 +12,7 @@ import (
 	"os"
 	"sync"
 
-	"unityperfagent/internal/unityprofiler"
+	"unityperf/internal/unityprofiler"
 )
 
 const (

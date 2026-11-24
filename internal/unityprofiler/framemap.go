@@ -3,8 +3,8 @@ package unityprofiler
 import (
 	"time"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 // 计数器键为 `ProfilerCategory/计数器名`，与 Unity Profiler 各模块的图表一一对应。
@@ -72,6 +72,7 @@ var cpuCategoryField = map[string]func(*protocol.FrameData, float32){
 	"Physics":    func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
 	"Physics2D":  func(f *protocol.FrameData, v float32) { f.CPUPhysicsMs += v },
 	"Animation":  func(f *protocol.FrameData, v float32) { f.CPUAnimationMs += v },
+	"Lighting":   func(f *protocol.FrameData, v float32) { f.CPULightingMs += v },
 	"GC":         func(f *protocol.FrameData, v float32) { f.CPUGCMs += v },
 	"VSync":      func(f *protocol.FrameData, v float32) { f.CPUVSyncMs += v },
 	"Gui":        func(f *protocol.FrameData, v float32) { f.CPUUIMs += v },
@@ -83,7 +84,11 @@ var cpuCategoryField = map[string]func(*protocol.FrameData, float32){
 // ToMemoryFrame normalizes a live raw-stream snapshot into the same in-memory
 // frame model used by offline .data imports.
 func ToMemoryFrame(snap FrameSnapshot) profileframe.Frame {
-	return profileframe.New(ToFrameData(snap), snap.Hierarchy)
+	frame := profileframe.New(ToFrameData(snap), snap.Hierarchy)
+	frame.Timeline = snap.Timeline
+	frame.PlayerStartNS = snap.StartNS
+	frame.PlayerEndNS = snap.StartNS + snap.DurationNS
+	return frame
 }
 
 // ToFrameData projects a raw snapshot to the summary consumed by the frame list

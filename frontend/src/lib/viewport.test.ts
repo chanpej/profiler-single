@@ -27,8 +27,9 @@ describe('clampVisible', () => {
     expect(clampVisible(DEFAULT_VISIBLE, 3)).toBe(3);
     expect(clampVisible(300, 10)).toBe(10);
   });
-  it('总数充足时限制在 300..4000', () => {
-    expect(clampVisible(8, 1000)).toBe(300);
+  it('总数充足时限制在 1..4000', () => {
+    expect(clampVisible(0, 1000)).toBe(1);
+    expect(clampVisible(8, 1000)).toBe(8);
     expect(clampVisible(9000, 10000)).toBe(4000);
     expect(clampVisible(300, 1000)).toBe(300);
   });
@@ -68,7 +69,7 @@ describe('clampViewport follow', () => {
 });
 
 describe('zoomViewport', () => {
-  it('跟随时放大到下限 300 仍钉住最新帧', () => {
+  it('跟随时放大仍钉住最新帧', () => {
     const got = zoomViewport(vp({ follow: true, visible: 600, selected: 999 }), 1000, 0.5, 800);
     expect(got.follow).toBe(true);
     expect(got.visible).toBe(300);
@@ -85,9 +86,11 @@ describe('zoomViewport', () => {
     expect(got.visible).toBe(80);
     expect(got.start).toBe(0);
   });
-  it('已达下限 300 时放大不再减少可见帧', () => {
-    const got = zoomViewport(vp({ follow: true, visible: 300 }), 1000, 0.5, 900);
-    expect(got.visible).toBe(300);
+  it('可放大到单帧，再从单帧缩小', () => {
+    const zoomed = zoomViewport(vp({ visible: 2 }), 3, wheelZoomFactor(-120), 2);
+    expect(zoomed.visible).toBe(1);
+    expect(zoomViewport(zoomed, 3, wheelZoomFactor(-120), 2).visible).toBe(1);
+    expect(zoomViewport(zoomed, 3, wheelZoomFactor(120), 2).visible).toBe(2);
   });
 });
 

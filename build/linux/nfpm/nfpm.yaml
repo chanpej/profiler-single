@@ -3,7 +3,7 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "unityperfagent.exe"
+name: "unityperf.exe"
 arch: ${GOARCH}
 platform: "linux"
 version: "0.1.0"
@@ -11,18 +11,18 @@ section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
 description: "Standalone Unity performance analysis tool"
-vendor: "UnityPerfAgent"
+vendor: "unityperf"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/unityperfagent.exe"
-    dst: "/usr/local/bin/unityperfagent.exe"
+  - src: "./bin/unityperf.exe"
+    dst: "/usr/local/bin/unityperf.exe"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/unityperfagent.exe.png"
-  - src: "./build/linux/unityperfagent.exe.desktop"
-    dst: "/usr/share/applications/unityperfagent.exe.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/unityperf.exe.png"
+  - src: "./build/linux/unityperf.exe.desktop"
+    dst: "/usr/share/applications/unityperf.exe.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:

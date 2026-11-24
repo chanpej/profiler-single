@@ -9,7 +9,7 @@ interface Props {
 }
 
 /** 自绘标题栏：拖拽、双击最大化、最小化/最大化/关闭。 */
-export function TitleBar({ title = 'UnityPerfAgent', subtitle = '', controls }: Props) {
+export function TitleBar({ title = 'unityperf', subtitle = '', controls }: Props) {
   const win = controls ?? defaultControls;
   const [maximised, setMaximised] = useState(false);
 

@@ -121,8 +121,8 @@ func NewPlayer() *Player {
 	return &Player{
 		Major: 2022, Minor: 3, Patch: 47, ReleaseType: 2, ReleaseNumber: 1,
 		StreamVersion: Unity2022StreamVersion,
-		ProjectName:   "UnityPerfAgentSim",
-		DeviceID:      "AndroidPlayer(11,UnityPerfAgent_Simulator@127.0.0.1)",
+		ProjectName:   "unityperfSim",
+		DeviceID:      "AndroidPlayer(11,unityperf_Simulator@127.0.0.1)",
 		Flags:         FlagSupportsProfile,
 		Interval:      5 * time.Millisecond,
 		ChunkSize:     512,

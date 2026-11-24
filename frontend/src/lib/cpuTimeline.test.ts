@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SampleNode } from '../types';
 import { emptyFrame } from './frame';
+import { CPU_CATEGORIES } from './profiler';
 import {
   BAR_H,
   MIN_SPAN_MS,
@@ -11,9 +12,11 @@ import {
   hitTest,
   layoutHeight,
   layoutTimeline,
+  layoutTimelineContext,
   msFromX,
   panDeltaFromPixels,
   panWindow,
+  projectSample,
   timeTicks,
   wheelZoomFactor,
   xFromMs,
@@ -54,6 +57,17 @@ const tree: SampleNode[] = [
 ];
 
 describe('layoutTimeline', () => {
+  it('distinguishes allocation samples from the garbage collector chart series', () => {
+    const samples = [
+      { ...tree[0].children![0], name: 'GC.Alloc', category: 'Other' },
+      { ...tree[0].children![1], name: 'GC.Collect', category: 'GC' },
+      { ...tree[0].children![0], startMs: 9, gcAllocKB: 1 },
+    ];
+    const { threads } = layoutTimeline([{ ...tree[0], children: samples }], null);
+    expect(CPU_CATEGORIES.find(({ id }) => id === 'gc')?.color).toBe('#72680C');
+    expect(threads[0].bars.slice(1).map(({ color }) => color)).toEqual(['#B2194C', '#72680C', '#3488A7']);
+  });
+
   it('按 startMs 把同名采样摆成两条独立时间条', () => {
     const { threads, totalMs } = layoutTimeline(tree, emptyFrame({ mainThreadMs: 10 }));
     expect(threads).toHaveLength(1);
@@ -65,10 +79,10 @@ describe('layoutTimeline', () => {
     expect(threads[0].maxDepth).toBe(1);
     expect(totalMs).toBeGreaterThanOrEqual(10);
     const withRender = layoutTimeline(tree, emptyFrame({ mainThreadMs: 10, renderMs: 6 }));
-    expect(withRender.threads.map((t) => t.name)).toEqual(['Main Thread', 'Render Thread']);
+    expect(withRender.threads.map((t) => t.name)).toEqual(['Main Thread']);
   });
 
-  it('没有 startMs 时在父节点内从左到右紧排子节点', () => {
+  it('没有 startMs 时不推算采样位置', () => {
     const packed: SampleNode[] = [{
       name: 'Main Thread',
       category: 'Internal',
@@ -82,20 +96,23 @@ describe('layoutTimeline', () => {
       ],
     }];
     const { threads } = layoutTimeline(packed, null);
-    expect(threads[0].bars.map((b) => [b.name, b.startMs])).toEqual([
-      ['Main Thread', 0],
-      ['A', 0],
-      ['B', 4],
-    ]);
+    expect(threads).toEqual([]);
   });
 
-  it('无采样树时用 CPU 分类色条 + Render Thread', () => {
+  it('只有汇总计数时不生成线程采样', () => {
     const frame = emptyFrame({ cpuTimeMs: 16, cpuRenderingMs: 5, cpuScriptsMs: 4, renderMs: 6, mainThreadMs: 14 });
     const { threads } = layoutTimeline([], frame);
-    expect(threads.map((t) => t.name)).toEqual(['Main Thread', 'Render Thread']);
-    expect(threads[0].bars[0].name).toBe('Rendering');
-    expect(threads[0].bars[0].durationMs).toBe(5);
-    expect(threads[1].bars[0].durationMs).toBe(6);
+    expect(threads).toEqual([]);
+  });
+
+  it('将带偏移的线程采样对齐到主线程时钟，并保留零时间戳', () => {
+    const layout = layoutTimeline([], null, [
+      { id: '7', name: 'Job/Worker', offsetMs: -3, samples: [{ ...tree[0], name: 'ExecuteJob' }] },
+      { id: '8', name: 'Job/Worker', offsetMs: 4, samples: tree },
+    ]);
+    expect(layout.startMs).toBe(-3);
+    expect(layout.threads.map((thread) => thread.bars.map((bar) => bar.startMs))).toEqual([[-3, -1, 3], [4, 6, 10]]);
+    expect(layout.threads[0].bars[0].id).not.toBe(layout.threads[1].bars[0].id);
   });
 });
 
@@ -130,6 +147,35 @@ describe('TimeWindow', () => {
 });
 
 describe('hitTest / ticks', () => {
+  it('aligns context samples by player frame offset and stable thread IDs', () => {
+    const current = layoutTimeline(tree, null);
+    const merged = layoutTimelineContext(current, [{
+      frameIndex: 2, selected: false, offsetMs: -14, durationMs: 11, threads: [
+        { id: 'main', name: 'Main Thread', offsetMs: 0, samples: tree },
+        { id: 'worker', name: 'Job/Worker', offsetMs: -2, samples: tree },
+      ],
+    }, { frameIndex: 4, selected: false, offsetMs: 14, durationMs: 19, threads: [] }]);
+    expect(merged.startMs).toBe(-16);
+    expect(merged.totalMs).toBe(33);
+    expect(merged.threads.map((thread) => thread.id)).toEqual(['main', 'worker']);
+    expect(merged.threads[0].bars[0]).toMatchObject({ startMs: -14, ghost: true });
+    const mainBars = merged.threads[0].bars;
+    expect(mainBars[mainBars.length - 1].ghost).toBeUndefined();
+    expect(merged.threads[1].bars[0]).toMatchObject({ startMs: -16, ghost: true });
+  });
+  it('projects actual sample widths and clips only the parts outside the viewport', () => {
+    const { threads } = layoutTimeline(tree, null);
+    const [parent, child, laterChild] = threads[0].bars;
+    expect(projectSample(parent, 200, fitWindow(10))).toMatchObject({ left: 0, right: 200 });
+    expect(projectSample(child, 200, fitWindow(10))).toMatchObject({ left: 40, right: 100 });
+    const win = { startMs: 4, spanMs: 2 };
+    expect(projectSample(parent, 200, win)).toEqual({ left: 0, right: 200, continuesLeft: true, continuesRight: true });
+    expect(projectSample(child, 200, win)).toEqual({ left: 0, right: 100, continuesLeft: true, continuesRight: false });
+    expect(projectSample(laterChild, 200, win)).toBeNull();
+    const y = RULER_H + 4 + BAR_H + 2;
+    expect(hitTest(threads, THREAD_LABEL_W + 99, y, THREAD_LABEL_W, 200, win)).toBe(child);
+    expect(hitTest(threads, THREAD_LABEL_W + 100, y, THREAD_LABEL_W, 200, win)).toBeNull();
+  });
   it('点中嵌套条时选中更深层采样', () => {
     const { threads } = layoutTimeline(tree, null);
     const plotW = 200;

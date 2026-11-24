@@ -3,10 +3,10 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,17 +15,17 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"unityperfagent/internal/adbforward"
-	"unityperfagent/internal/analyzer"
-	"unityperfagent/internal/capture"
-	"unityperfagent/internal/collector"
-	"unityperfagent/internal/device"
-	"unityperfagent/internal/llm"
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/profilerproxy"
-	"unityperfagent/internal/protocol"
-	"unityperfagent/internal/unityprofiler"
-	"unityperfagent/internal/upac"
+	"unityperf/internal/adbforward"
+	"unityperf/internal/analyzer"
+	"unityperf/internal/capture"
+	"unityperf/internal/collector"
+	"unityperf/internal/device"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/profilerproxy"
+	"unityperf/internal/protocol"
+	"unityperf/internal/screenshots"
+	"unityperf/internal/unityprofiler"
+	"unityperf/internal/upac"
 )
 
 // TickEventName 是采集进度事件名，前端据此增量刷新。
@@ -34,24 +34,18 @@ const TickEventName = "perf:tick"
 // ImportProgressEventName 是加载存档解析进度事件名。
 const ImportProgressEventName = "perf:import-progress"
 
-// AgentChunkEventName 是 ACP 聊天流式文本事件名。
-const AgentChunkEventName = "agent:chunk"
-
 const importProgressMinInterval = 80 * time.Millisecond
 
 const tickInterval = 250 * time.Millisecond
 
 // TickEvent 是推送给前端的采集进度。
 type TickEvent struct {
-	TotalFrames uint64 `json:"totalFrames"`
-	Retained    int    `json:"retained"`
-	Connected   bool   `json:"connected"`
-	Recording   bool   `json:"recording"`
-}
-
-// AgentChunkEvent 是 ACP Agent 流式回复的一段文本。
-type AgentChunkEvent struct {
-	Text string `json:"text"`
+	Reconnecting bool   `json:"reconnecting"`
+	LastError    string `json:"lastError"`
+	TotalFrames  uint64 `json:"totalFrames"`
+	Retained     int    `json:"retained"`
+	Connected    bool   `json:"connected"`
+	Recording    bool   `json:"recording"`
 }
 
 // ImportProgressEvent 是加载存档时的解析进度。
@@ -96,26 +90,23 @@ type Status struct {
 
 // PerfService 是性能采集与分析的门面，供前端调用。
 type PerfService struct {
-	mu         sync.Mutex
-	client     *device.Client
-	session    *collector.Session
-	llmCfg     llm.Config
-	transport  string
-	tunnel     *adbforward.Tunnel
-	adbRun     adbforward.Runner
-	emit       func(name string, data any)
-	logger     *log.Logger
-	logFile    *os.File
-	recording  bool
-	captureRaw bool
-	sourceFile string
-	loadedHS   protocol.Handshake
-	deep       bool
-	callStacks bool
-	lastErr    string
-	chat       *llm.ChatSession
-	mcp        *agentMCPBridge
-	agentLogs  []AgentLogEntry
+	connectionMu sync.Mutex
+	mu           sync.Mutex
+	client       *device.Client
+	session      *collector.Session
+	transport    string
+	tunnel       *adbforward.Tunnel
+	adbRun       adbforward.Runner
+	emit         func(name string, data any)
+	logger       *log.Logger
+	logFile      *os.File
+	recording    bool
+	captureRaw   bool
+	sourceFile   string
+	loadedHS     protocol.Handshake
+	deep         bool
+	callStacks   bool
+	lastErr      string
 
 	// wantLive 表示用户点了连接且尚未点断开。对端 EOF 后仍为 true，会自动重连。
 	wantLive        bool
@@ -127,6 +118,11 @@ type PerfService struct {
 	livePort        int
 	liveKind        string
 	reconnectCancel context.CancelFunc
+	incoming        *unityprofiler.AutoconnectListener
+	incomingPort    int
+	playerLogs      playerLogBuffer
+	usbLogCancel    context.CancelFunc
+	screen          screenState
 
 	// tickReq 是"界面需要刷新"的合并信号，容量 1 且非阻塞投递。
 	tickReq chan struct{}
@@ -149,8 +145,8 @@ func NewPerfService() *PerfService {
 		tickReq:    make(chan struct{}, 1),
 		stopUI:     make(chan struct{}),
 	}
-	p.mcp = newAgentMCPBridge(p)
 	p.client.SetRawHandler(p.onRaw)
+	p.client.SetLogHandler(p.onPlayerLog)
 	go p.uiLoop()
 	return p
 }
@@ -162,13 +158,12 @@ func (p *PerfService) ServiceStartup(ctx context.Context, options application.Se
 	p.emit = func(name string, data any) { app.Event.Emit(name, data) }
 	p.mu.Unlock()
 	p.openLog()
+	p.startDefaultAutoconnect(defaultAutoconnectPort)
 	return nil
 }
 
 func (p *PerfService) ServiceShutdown() error {
 	p.Disconnect()
-	p.AgentChatClose()
-	p.mcp.close()
 	close(p.stopUI)
 	p.mu.Lock()
 	f := p.logFile
@@ -187,7 +182,7 @@ func (p *PerfService) openLog() {
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(filepath.Dir(exe), "unityperfagent.log"),
+	f, err := os.OpenFile(filepath.Join(filepath.Dir(exe), "unityperf.log"),
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return
@@ -196,7 +191,7 @@ func (p *PerfService) openLog() {
 	p.logFile = f
 	p.logger = log.New(f, "", log.LstdFlags|log.Lmicroseconds)
 	p.mu.Unlock()
-	p.logf("=== UnityPerfAgent 启动 ===")
+	p.logf("=== unityperf 启动 ===")
 }
 
 func (p *PerfService) logf(format string, args ...any) {
@@ -218,30 +213,80 @@ func (p *PerfService) connected() bool {
 	return p.connectedLocked()
 }
 
-// Connect 仅接受 USB 目标（usb / adb / adb:<serial>）。Wi‑Fi Direct Connection 已移除。
+// Connect 通过 PlayerConnection 直连指定 IP；端口为 0 时自动查找 Player。
 func (p *PerfService) Connect(host string, port int) (protocol.Handshake, error) {
 	if serial, viaADB := adbforward.ParseHost(host); viaADB {
 		return p.ConnectUSB(serial, "")
 	}
-	return protocol.Handshake{}, errors.New("已移除 Wi-Fi Direct Connection，请使用 USB 连接")
+	host = strings.TrimSpace(host)
+	if ip := net.ParseIP(host); ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
+		return protocol.Handshake{}, errors.New("请输入有效的手机 IP 地址")
+	}
+	if port < 0 || port > 65535 {
+		return protocol.Handshake{}, errors.New("端口必须在 1–65535 之间，或使用 0 自动查找")
+	}
+	p.connectionMu.Lock()
+	defer p.connectionMu.Unlock()
+	p.mu.Lock()
+	if p.connectedLocked() || (p.wantLive && p.incoming == nil) {
+		p.mu.Unlock()
+		return protocol.Handshake{}, errors.New("已有连接或正在重连，请先断开")
+	}
+	incoming, listenPort := p.incoming, p.incomingPort
+	if incoming != nil {
+		p.incoming = nil
+		p.incomingPort = 0
+		p.wantLive = false
+		p.reconnecting = false
+		p.transport = ""
+	}
+	p.mu.Unlock()
+	if incoming != nil {
+		incoming.Close()
+	}
+	hs, err := p.connectTCP(host, port, "tcp", true)
+	if err != nil && incoming != nil {
+		p.startDefaultAutoconnect(listenPort)
+	}
+	return hs, err
 }
 
 // ConnectUSB 通过 adb forward 连接 USB 手机上的 Development Player。
 // packageID 为应用包名（如 com.company.game），用于 localabstract:Unity-{bundleId}。
 // 只使用官方通道，不回退 tcp:55000。
 func (p *PerfService) ConnectUSB(serial, packageID string) (protocol.Handshake, error) {
+	p.connectionMu.Lock()
+	defer p.connectionMu.Unlock()
+	packageID = adbforward.NormalizePackageID(packageID)
+	if err := adbforward.ValidatePackageID(packageID); err != nil {
+		return protocol.Handshake{}, err
+	}
 	p.mu.Lock()
 	if p.connectedLocked() {
 		p.mu.Unlock()
 		return protocol.Handshake{}, errors.New("已有连接，请先断开")
 	}
-	if p.wantLive && p.reconnecting {
+	incoming, port := p.incoming, p.incomingPort
+	if incoming != nil {
+		p.incoming = nil
+		p.incomingPort = 0
+		p.wantLive = false
+		p.reconnecting = false
+		p.transport = ""
+	} else if p.wantLive && p.reconnecting {
 		hs := p.liveHS
 		p.mu.Unlock()
 		return hs, nil
 	}
 	p.mu.Unlock()
-	return p.dialUSB(serial, packageID, true)
+	if incoming != nil {
+		incoming.Close()
+	}
+	hs, err := p.dialUSB(serial, packageID, true)
+	if err != nil && incoming != nil {
+		p.startDefaultAutoconnect(port)
+	}
+	return hs, err
 }
 
 func (p *PerfService) dialUSB(serial, packageID string, fresh bool) (protocol.Handshake, error) {
@@ -304,6 +349,7 @@ func (p *PerfService) dialUSB(serial, packageID string, fresh bool) (protocol.Ha
 		p.usbSerial = dev.Serial
 		p.usbPackage = packageID
 		p.liveHS = hs
+		p.startUSBLogsLocked(run, dev.Serial, packageID)
 		p.mu.Unlock()
 		if old != nil && (old.LocalPort != tun.LocalPort || old.Remote != tun.Remote) {
 			_ = adbforward.Remove(run, *old)
@@ -324,6 +370,7 @@ func (p *PerfService) connectTCP(host string, port int, transport string, fresh 
 	}
 	if fresh {
 		p.session.ClearAll()
+		p.resetScreenLocked(true)
 		p.sourceFile = ""
 		p.loadedHS = protocol.Handshake{}
 	}
@@ -333,7 +380,13 @@ func (p *PerfService) connectTCP(host string, port int, transport string, fresh 
 	p.lastErr = ""
 	p.mu.Unlock()
 
-	hs, err := p.client.Connect(host, port, p.onFrame, p.onClosed)
+	var hs protocol.Handshake
+	var err error
+	if transport == "tcp" && port == 0 {
+		hs, port, err = p.client.ConnectDirect(host, p.onFrame, p.onClosed)
+	} else {
+		hs, err = p.client.Connect(host, port, p.onFrame, p.onClosed)
+	}
 	if err != nil {
 		if fresh {
 			p.mu.Lock()
@@ -379,7 +432,17 @@ func (p *PerfService) DiscoverPlayers() ([]unityprofiler.PlayerInfo, error) {
 
 // Disconnect 断开 Profiler 连接（并拆除 adb forward）。已采集数据保留。
 func (p *PerfService) Disconnect() {
+	p.connectionMu.Lock()
+	defer p.connectionMu.Unlock()
 	p.mu.Lock()
+	p.stopScreenLocked()
+	incoming := p.incoming
+	p.incoming = nil
+	p.incomingPort = 0
+	if p.usbLogCancel != nil {
+		p.usbLogCancel()
+		p.usbLogCancel = nil
+	}
 	p.wantLive = false
 	p.reconnecting = false
 	p.stopReconnectLocked()
@@ -390,6 +453,9 @@ func (p *PerfService) Disconnect() {
 	p.liveKind = ""
 	p.liveHS = protocol.Handshake{}
 	p.mu.Unlock()
+	if incoming != nil {
+		incoming.Close()
+	}
 	p.client.Close()
 	p.mu.Lock()
 	p.transport = ""
@@ -472,8 +538,12 @@ func (p *PerfService) Stats() collector.Stats {
 
 func (p *PerfService) Clear() {
 	connected := p.client.Connected()
-	p.session.ClearRecordedData()
 	p.mu.Lock()
+	p.session.ClearRecordedData()
+	p.resetScreenLocked(false)
+	if connected || p.screen.epoch > 0 {
+		p.screen.epoch = 1
+	}
 	p.sourceFile = ""
 	p.loadedHS = protocol.Handshake{}
 	p.captureRaw = connected
@@ -531,37 +601,117 @@ func (p *PerfService) FrameHierarchy(index int) []protocol.SampleNode {
 	return h
 }
 
+func (p *PerfService) FrameTimeline(index int, frameIndex uint64) []protocol.TimelineThread {
+	frame, ok := p.session.FrameAt(index)
+	if !ok || frame.Summary.FrameIndex != frameIndex {
+		return nil
+	}
+	return frame.TimelineThreads()
+}
+
+func (p *PerfService) FrameTimelineContext(index int, frameIndex uint64) []protocol.TimelineFrame {
+	const neighbors = 3
+	if index < 0 {
+		return nil
+	}
+	start := max(0, index-neighbors)
+	frames := p.session.RangeFrames(start, index-start+neighbors+1)
+	selected := index - start
+	if selected >= len(frames) || frames[selected].Summary.FrameIndex != frameIndex {
+		return nil
+	}
+	anchor := frames[selected]
+	left, right := selected, selected
+	for left > 0 && timelineFramesShareClock(frames[left-1], frames[left]) {
+		left--
+	}
+	for right+1 < len(frames) && timelineFramesShareClock(frames[right], frames[right+1]) {
+		right++
+	}
+	result := make([]protocol.TimelineFrame, right-left+1)
+	for position := left; position <= right; position++ {
+		frame := frames[position]
+		result[position-left] = protocol.TimelineFrame{
+			FrameIndex: frame.Summary.FrameIndex, DurationMs: timelineFrameDuration(frame),
+			Selected: position == selected, Threads: frame.TimelineThreads(),
+		}
+	}
+	center := selected - left
+	for position := center - 1; position >= 0; position-- {
+		result[position].OffsetMs = result[position+1].OffsetMs - result[position].DurationMs
+	}
+	for position := center + 1; position < len(result); position++ {
+		result[position].OffsetMs = result[position-1].OffsetMs + result[position-1].DurationMs
+	}
+	if anchor.PlayerEndNS > anchor.PlayerStartNS {
+		for position := range result {
+			result[position].OffsetMs = float64(frames[left+position].PlayerStartNS-anchor.PlayerStartNS) / 1e6
+		}
+	}
+	return result
+}
+
+func timelineFramesShareClock(previous, next profileframe.Frame) bool {
+	if previous.ClockEpoch != next.ClockEpoch || previous.Summary.FrameIndex >= next.Summary.FrameIndex {
+		return false
+	}
+	previousTimed := previous.PlayerEndNS > previous.PlayerStartNS
+	nextTimed := next.PlayerEndNS > next.PlayerStartNS
+	if previousTimed != nextTimed {
+		return false
+	}
+	if previousTimed {
+		return previous.PlayerEndNS <= next.PlayerStartNS
+	}
+	return previous.Summary.FrameIndex+1 == next.Summary.FrameIndex && timelineFrameDuration(previous) > 0 && timelineFrameDuration(next) > 0
+}
+
+func timelineFrameDuration(frame profileframe.Frame) float64 {
+	if frame.PlayerEndNS > frame.PlayerStartNS {
+		return float64(frame.PlayerEndNS-frame.PlayerStartNS) / 1e6
+	}
+	return float64(max(frame.Summary.CPUTimeMs, frame.Summary.MainThreadMs))
+}
+
 // ExportCapture stores the current PD3U stream as a native .upac archive.
-// Unity Editor .data is a private format and is deliberately never generated
-// from live data.
 func (p *PerfService) ExportCapture(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return errors.New("导出路径为空")
 	}
 	if strings.EqualFold(filepath.Ext(path), ".data") {
-		return errors.New("实时采集只能保存为 .upac；Unity Editor .data 仅支持导入读取")
-	}
-	raw := p.session.Raw()
-	if len(raw) == 0 {
-		return errors.New("没有可导出的原始 PD3U 数据")
+		return errors.New("请通过「导出 Unity .data」选择 Editor，或保存为 .upac")
 	}
 	hs, _ := p.client.Handshake()
 	p.mu.Lock()
+	raw := p.session.Raw()
 	if hs == (protocol.Handshake{}) {
 		hs = p.liveHS
 	}
+	screen := p.screenTrackLocked()
 	p.mu.Unlock()
-	if err := upac.SaveFile(path, upac.File{Handshake: hs, Raw: raw}); err != nil {
+	if len(raw) == 0 {
+		return errors.New("没有可导出的原始 PD3U 数据")
+	}
+	if err := upac.SaveFile(path, upac.File{Handshake: hs, Raw: raw, Screen: screen}); err != nil {
 		return fmt.Errorf("保存 UPAC 存档失败：%w", err)
 	}
 	p.logf("已导出 %d 个原始 PD3U 分块 -> %s", len(raw), path)
 	return nil
 }
 
+func (p *PerfService) ExportUnityData(path, editor string) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	count, err := capture.ExportWithEditor(ctx, strings.TrimSpace(editor), strings.TrimSpace(path), p.session.Raw())
+	if err == nil {
+		p.logf("Unity Editor 已导出 %d 帧 -> %s", count, path)
+	}
+	return count, err
+}
+
 // ImportCapture loads either a native .upac archive or a Unity Editor .data
-// file. .data remains a read-only compatibility input; .upac is the native
-// lossless PD3U session format.
+// file. .upac is the native lossless PD3U session format.
 func (p *PerfService) ImportCapture(path string) (int, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -592,7 +742,7 @@ func (p *PerfService) importUnityData(path string) (int, error) {
 	}
 	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
 	p.session.ReplaceFrames(file.Frames)
-	return p.finishImport(path, file.Handshake)
+	return p.finishImport(path, file.Handshake, screenshots.Track{})
 }
 
 func (p *PerfService) importUPAC(path string) (int, error) {
@@ -603,7 +753,7 @@ func (p *PerfService) importUPAC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPAC 存档：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, &last)
+	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, file.Screen, &last)
 }
 
 // importUPPC loads a transparent Editor↔Player proxy capture. It is a lossless
@@ -616,10 +766,10 @@ func (p *PerfService) importUPPC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPPC 原始抓包：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), &last)
+	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), screenshots.Track{}, &last)
 }
 
-func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, last *time.Time) (int, error) {
+func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, screen screenshots.Track, last *time.Time) (int, error) {
 	frames, err := unityprofiler.ReplayFramesWithProgress(raw, func(done, total int) {
 		p.emitImportProgress(fileName, "parse", done, total, false, last)
 	})
@@ -632,7 +782,7 @@ func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handsha
 	p.emitImportProgress(fileName, "parse", len(raw), len(raw), true, last)
 	p.session.ReplaceFrames(frames)
 	p.session.SetRaw(raw)
-	return p.finishImport(path, handshake)
+	return p.finishImport(path, handshake, screen)
 }
 
 func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
@@ -648,9 +798,11 @@ func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
 	return protocol.Handshake{}
 }
 
-func (p *PerfService) finishImport(path string, handshake protocol.Handshake) (int, error) {
+func (p *PerfService) finishImport(path string, handshake protocol.Handshake, screen screenshots.Track) (int, error) {
 	connected := p.client.Connected()
 	p.mu.Lock()
+	p.resetScreenLocked(true)
+	p.screen.track = screen
 	p.sourceFile = path
 	p.loadedHS = handshake
 	p.captureRaw = false
@@ -667,155 +819,15 @@ func (p *PerfService) Analyze() analyzer.Report {
 	return analyzer.Analyze(p.session.Range(0, p.session.Len()))
 }
 
-func (p *PerfService) SetLLMConfig(cfg llm.Config) {
-	cfg = cfg.Normalize()
-	p.mu.Lock()
-	old := p.llmCfg
-	p.llmCfg = cfg
-	chat := p.chat
-	restart := chat != nil && llm.ShouldRestartChat(old, cfg)
-	if restart {
-		p.chat = nil
-	} else if chat != nil {
-		chat.UpdateConfig(cfg)
-	}
-	p.mu.Unlock()
-	if restart {
-		chat.Close()
-	}
-}
-
-// ProbeAgent 检测给定配置能否完成 ACP 握手。不打断当前聊天会话。
-func (p *PerfService) ProbeAgent(ctx context.Context, cfg llm.Config) llm.ProbeResult {
-	return llm.Probe(ctx, cfg)
-}
-
-// ListAgentModels 探测当前 Agent 支持的模型列表。
-// Codex：`codex debug models`；Cursor：`agent --list-models`，失败则回退 ACP configOptions。
-func (p *PerfService) ListAgentModels(ctx context.Context, cfg llm.Config) ([]llm.AgentModel, error) {
-	cfg = cfg.Normalize()
-	launch := cfg.Launch()
-	if llm.IsCodexCLI(launch) {
-		return llm.ListCodexModels(ctx, launch)
-	}
-	if llm.IsCursorCLI(launch) {
-		return llm.ListCursorModels(ctx, launch)
-	}
-	return nil, nil
-}
-
-// AgentChatSend 向持久 ACP 会话发送一轮用户消息，流式片段通过 agent:chunk 事件推送。
-func (p *PerfService) AgentChatSend(ctx context.Context, message string) (string, error) {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return "", errors.New("消息为空")
-	}
-	p.addAgentLog("Agent", "User → Agent", "prompt", message)
-	sess, err := p.ensureChat()
-	if err != nil {
-		p.addAgentLog("Agent", "System → User", "start", err.Error())
-		return "", err
-	}
-	p.mu.Lock()
-	emit := p.emit
-	p.mu.Unlock()
-	result, err := sess.Prompt(ctx, message, func(chunk string) {
-		emit(AgentChunkEventName, AgentChunkEvent{Text: chunk})
-	})
-	if err != nil {
-		p.addAgentLog("Agent", "Agent → User", "error", err.Error())
-		return "", err
-	}
-	p.addAgentLog("Agent", "Agent → User", "response", result)
-	return result, nil
-}
-
-// ExportAgentChat 将 Agent Chat 会话以 UTF-8 Markdown 写入保存对话框选择的路径。
-func (p *PerfService) ExportAgentChat(path, content string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return errors.New("导出 Agent Chat 会话失败：保存路径为空")
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("导出 Agent Chat 会话到 %q 失败：%w", path, err)
-	}
-	return nil
-}
-
-// AgentChatClose 结束当前 ACP 聊天会话。
-func (p *PerfService) AgentChatClose() {
-	p.mu.Lock()
-	chat := p.chat
-	p.chat = nil
-	p.mu.Unlock()
-	if chat != nil {
-		chat.Close()
-	}
-}
-
-func (p *PerfService) ensureChat() (*llm.ChatSession, error) {
-	p.mu.Lock()
-	if p.chat != nil {
-		sess := p.chat
-		p.mu.Unlock()
-		return sess, nil
-	}
-	cfg := p.llmCfg
-	p.mu.Unlock()
-
-	mcpServer, err := p.mcp.config()
-	if err != nil {
-		return nil, err
-	}
-	sess := llm.NewChatSession(cfg, mcpServer)
-	if err := sess.Start(context.Background()); err != nil {
-		return nil, err
-	}
-
-	p.mu.Lock()
-	if p.chat != nil {
-		existing := p.chat
-		p.mu.Unlock()
-		sess.Close()
-		return existing, nil
-	}
-	p.chat = sess
-	p.mu.Unlock()
-	return sess, nil
-}
-
-func (p *PerfService) LLMConfig() llm.Config {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.llmCfg.Normalize()
-}
-
-func (p *PerfService) Diagnose(ctx context.Context) (string, error) {
-	report := p.Analyze()
-	data, err := json.Marshal(report)
-	if err != nil {
-		return "", err
-	}
-	mcpServer, err := p.mcp.config()
-	if err != nil {
-		return "", err
-	}
-	p.mu.Lock()
-	client := llm.NewClient(p.llmCfg, mcpServer)
-	p.mu.Unlock()
-	return client.Diagnose(ctx, string(data))
-}
-
-// onFrame 只做入库与一次非阻塞通知。
-//
-// 绝不能在这里直接推送事件：事件推送要经过 webview，一旦卡住就会把读取循环拖死，
-// 表现为界面显示"已连接"却永远 0 帧，同时连接还占着 Player 唯一的 Profiler 槽位。
 func (p *PerfService) onFrame(frame profileframe.Frame) {
 	p.mu.Lock()
-	recording := p.recording
-	p.mu.Unlock()
-	if !recording {
+	defer p.mu.Unlock()
+	if !p.recording {
 		return
+	}
+	if frame.PlayerEndNS > frame.PlayerStartNS {
+		frame.ClockEpoch = p.screen.epoch
+		p.screen.track.Observe(frame.ClockEpoch, time.Now().UnixNano(), frame.PlayerEndNS)
 	}
 	p.session.AppendFrame(frame)
 	p.notifyUI()
@@ -823,12 +835,13 @@ func (p *PerfService) onFrame(frame profileframe.Frame) {
 
 func (p *PerfService) onRaw(body []byte) {
 	p.mu.Lock()
-	capture := p.captureRaw
-	p.mu.Unlock()
-	if !capture {
-		return
+	defer p.mu.Unlock()
+	if unityprofiler.IsStreamHeader(body) {
+		p.screen.epoch++
 	}
-	p.session.AppendRaw(body)
+	if p.captureRaw {
+		p.session.AppendRaw(body)
+	}
 }
 
 func (p *PerfService) onClosed(err error) {
@@ -1013,12 +1026,15 @@ func (p *PerfService) uiLoop() {
 		}
 		p.mu.Lock()
 		recording := p.recording
+		reconnecting, lastErr := p.reconnecting, p.lastErr
 		p.mu.Unlock()
 		ev := TickEvent{
-			TotalFrames: p.session.Total(),
-			Retained:    p.session.Len(),
-			Connected:   p.connected(),
-			Recording:   recording,
+			Reconnecting: reconnecting,
+			LastError:    lastErr,
+			TotalFrames:  p.session.Total(),
+			Retained:     p.session.Len(),
+			Connected:    p.connected(),
+			Recording:    recording,
 		}
 		if ev != last {
 			last = ev

@@ -83,8 +83,8 @@ describe('hierarchy', () => {
   });
 
   it('分类颜色', () => {
-    expect(categoryColor('Scripts')).toBe('#3B6CB5');
-    expect(categoryColor('Unknown')).toBe('#5D6D7E');
+    expect(categoryColor('Scripts')).toBe('#3488A7');
+    expect(categoryColor('Unknown')).toBe('#7A7B1E');
   });
 
   it('按名字合并同名兄弟并累加 Calls / Total', () => {

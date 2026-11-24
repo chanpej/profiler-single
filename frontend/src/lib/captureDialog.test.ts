@@ -11,6 +11,19 @@ import { Dialogs } from '@wailsio/runtime';
 import { captureDialogs } from './captureDialog';
 
 describe('captureDialogs', () => {
+  it('prompts for a .data destination and an Editor executable', async () => {
+    vi.mocked(Dialogs.SaveFile).mockResolvedValue('capture.data');
+    vi.mocked(Dialogs.OpenFile).mockResolvedValue('C:/Unity/Editor/Unity.exe');
+    await expect(captureDialogs.save('data')).resolves.toBe('capture.data');
+    expect(Dialogs.SaveFile).toHaveBeenCalledWith(expect.objectContaining({
+      Filename: expect.stringMatching(/\.data$/),
+      Filters: [{ DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' }],
+    }));
+    await expect(captureDialogs.pickEditor()).resolves.toBe('C:/Unity/Editor/Unity.exe');
+    expect(Dialogs.OpenFile).toHaveBeenCalledWith(expect.objectContaining({
+      Filters: [{ DisplayName: 'Editor (*.exe)', Pattern: '*.exe' }],
+    }));
+  });
   beforeEach(() => {
 
     vi.mocked(Dialogs.OpenFile).mockReset();
@@ -41,7 +54,7 @@ describe('captureDialogs', () => {
     await expect(captureDialogs.open()).resolves.toBe('a.upac');
     expect(Dialogs.OpenFile).toHaveBeenCalledWith(expect.objectContaining({
       Filters: [
-        { DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' },
+        { DisplayName: 'unityperf Capture (*.upac)', Pattern: '*.upac' },
         { DisplayName: 'Unity Profiler Proxy Capture (*.uppc)', Pattern: '*.uppc' },
         { DisplayName: 'Unity Profiler Data (*.data)', Pattern: '*.data' },
       ],
@@ -53,7 +66,7 @@ describe('captureDialogs', () => {
     await expect(captureDialogs.save()).resolves.toBe('capture.upac');
     expect(Dialogs.SaveFile).toHaveBeenCalledWith(expect.objectContaining({
       Filename: expect.stringMatching(/^profiler-.*\.upac$/),
-      Filters: [{ DisplayName: 'UnityPerfAgent Capture (*.upac)', Pattern: '*.upac' }],
+      Filters: [{ DisplayName: 'unityperf Capture (*.upac)', Pattern: '*.upac' }],
     }));
   });
 });

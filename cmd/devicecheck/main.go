@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"unityperfagent/internal/adbforward"
-	"unityperfagent/internal/analyzer"
-	"unityperfagent/internal/collector"
-	"unityperfagent/internal/device"
+	"unityperf/internal/adbforward"
+	"unityperf/internal/analyzer"
+	"unityperf/internal/collector"
+	"unityperf/internal/device"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 }
 
 func run(serial, packageID string, usb bool, duration time.Duration) error {
-	fmt.Println("== UnityPerfAgent Profiler 链路自检 ==")
+	fmt.Println("== unityperf Profiler 链路自检 ==")
 
 	if !usb {
 		return fmt.Errorf("请使用 -usb 连接真机")

@@ -7,12 +7,11 @@ import type { Events } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import type * as services$0 from "../../../../../unityperfagent/services/models.js";
+import type * as services$0 from "../../../../../unityperf/services/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
-            "agent:chunk": services$0.AgentChunkEvent;
             "perf:import-progress": services$0.ImportProgressEvent;
             "perf:tick": services$0.TickEvent;
         }

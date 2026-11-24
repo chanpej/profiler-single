@@ -3,8 +3,10 @@
 package device
 
 import (
-	"unityperfagent/internal/protocol"
-	"unityperfagent/internal/unityprofiler"
+	"net"
+
+	"unityperf/internal/protocol"
+	"unityperf/internal/unityprofiler"
 )
 
 // FrameHandler 在收到每帧 Profiler 数据时被调用。
@@ -23,6 +25,10 @@ func NewClient() *Client {
 	return &Client{sess: unityprofiler.NewSession()}
 }
 
+func (c *Client) SetLogHandler(fn func(string, string)) {
+	c.sess.SetLogHandler(fn)
+}
+
 // Connect 连接到 host:port 上的 Unity Player（默认端口 55000），校验 Unity 2022。
 func (c *Client) Connect(host string, port int, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
 	if c.sess == nil {
@@ -31,9 +37,17 @@ func (c *Client) Connect(host string, port int, onFrame FrameHandler, onClosed f
 	return c.sess.Connect(host, port, onFrame, onClosed)
 }
 
+func (c *Client) ConnectDirect(host string, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, int, error) {
+	return c.sess.ConnectDirect(host, onFrame, onClosed)
+}
+
 // Handshake 返回当前 Player 信息。
 func (c *Client) Handshake() (protocol.Handshake, error) {
 	return c.sess.Handshake()
+}
+
+func (c *Client) ConnectIncoming(conn net.Conn, onFrame FrameHandler, onClosed func(error)) (protocol.Handshake, error) {
+	return c.sess.ConnectIncoming(conn, onFrame, onClosed)
 }
 
 // PatchHandshake 补全握手字段（例如 USB 下的 Unity 版本）。

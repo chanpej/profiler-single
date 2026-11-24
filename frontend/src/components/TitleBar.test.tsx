@@ -16,10 +16,10 @@ function mockWin(over: Partial<WindowControls> = {}): WindowControls {
 
 describe('TitleBar', () => {
   it('显示标题与窗口按钮', () => {
-    render(<TitleBar title="UnityPerfAgent" controls={mockWin()} />);
+    render(<TitleBar controls={mockWin()} />);
     expect(screen.getByTestId('titlebar')).toBeInTheDocument();
     expect(screen.getByTestId('titlebar-icon')).toHaveAttribute('src', '/app-icon.png');
-    expect(screen.getByText('UnityPerfAgent')).toBeInTheDocument();
+    expect(screen.getByText('unityperf')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '最小化' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '最大化' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
@@ -44,7 +44,7 @@ describe('TitleBar', () => {
   it('双击标题区域切换最大化', async () => {
     const win = mockWin();
     render(<TitleBar controls={win} />);
-    await userEvent.dblClick(screen.getByText('UnityPerfAgent'));
+    await userEvent.dblClick(screen.getByText('unityperf'));
     expect(win.toggleMaximise).toHaveBeenCalled();
   });
 

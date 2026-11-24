@@ -5,13 +5,13 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "UnityPerfAgent"
+    !define INFO_PROJECTNAME "unityperf"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "UnityPerfAgent"
+    !define INFO_COMPANYNAME "unityperf"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "UnityPerfAgent"
+    !define INFO_PRODUCTNAME "unityperf"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "0.1.0"

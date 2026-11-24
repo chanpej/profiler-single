@@ -78,17 +78,11 @@ func WriteMessage(w io.Writer, id MessageID, body []byte) error {
 	if len(body) > MaxPayloadSize {
 		return ErrPayloadTooLarge
 	}
-	hdr := make([]byte, ConnHeaderSize)
+	hdr := make([]byte, ConnHeaderSize, ConnHeaderSize+len(body))
 	binary.LittleEndian.PutUint32(hdr[0:4], ConnMagic)
 	copy(hdr[4:20], id[:])
 	binary.LittleEndian.PutUint32(hdr[20:24], uint32(len(body)))
-	if _, err := w.Write(hdr); err != nil {
-		return err
-	}
-	if len(body) == 0 {
-		return nil
-	}
-	_, err := w.Write(body)
+	_, err := w.Write(append(hdr, body...))
 	return err
 }
 

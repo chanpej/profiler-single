@@ -77,17 +77,6 @@ describe('ProfilerToolbar', () => {
     expect(screen.getByLabelText('无选中帧')).toBeInTheDocument();
   });
 
-  it('有选中帧时显示插入到 Agent Chat 的 AI 按钮', async () => {
-    const onInsertFrameReference = vi.fn();
-    const { rerender } = renderBar({ onInsertFrameReference });
-    await userEvent.click(screen.getByRole('button', { name: '插入当前帧到 Agent Chat' }));
-    expect(onInsertFrameReference).toHaveBeenCalledOnce();
-    rerender(
-      <ProfilerToolbar recording connected frame={null} selectedIndex={-1} total={10} onClear={noop} onPrev={noop} onNext={noop} onSeek={noop} onCurrent={noop} onToggleRecord={noop} onPause={noop} onImport={noop} />,
-    );
-    expect(screen.queryByRole('button', { name: '插入当前帧到 Agent Chat' })).not.toBeInTheDocument();
-  });
-
   it('Load 触发回调', async () => {
     const onImport = vi.fn();
     renderBar({ onImport });

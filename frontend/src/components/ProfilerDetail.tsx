@@ -1,11 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardCopy } from 'lucide-react';
-import type { FrameData, ProfilerModuleId, SampleNode } from '../types';
+import type { CpuTimelineFrame, FrameData, FrameRange, HeavyProfile, ProfilerModuleId, SampleNode } from '../types';
 import { memoryEditorSummary, memoryMetricAvailable, moduleBreakdown, moduleById, renderingCounters, frameTimeMs, gpuOrFrameMs } from '../lib/profiler';
 import { formatCount, formatFps, formatGCAlloc, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
 import { categoryColor, flattenVisible, mergeExpanded, mergeSampleNodes } from '../lib/hierarchy';
-import { copyText } from '../lib/agentChatUi';
+import { copyText } from '../lib/clipboard';
 import { CpuTimeline } from './CpuTimeline';
+import { CpuLeftHeavy } from './CpuLeftHeavy';
 import {
   callstackRatioFromPointer,
   loadCallstackRatio,
@@ -22,16 +23,31 @@ interface Props {
   frame: FrameData | null;
   hierarchy?: SampleNode[];
   callStacks?: boolean;
+  getTimeline?: (index: number, frameIndex: number) => Promise<CpuTimelineFrame[]>;
+  timelineSelection?: number;
+  timelineFallback?: { index: number; frame: FrameData } | null;
+  onTimelineSeek?: (index: number) => void;
+  refreshTimeline?: boolean;
+  getHeavyProfile?: (start: number, end: number) => Promise<HeavyProfile>;
+  heavyRange?: FrameRange | null;
+  onHeavyRange?: (range: FrameRange | null) => void;
+  cpuTab?: CpuTab;
+  onCpuTabChange?: (tab: CpuTab) => void;
+  totalFrames?: number;
 }
 
-type CpuTab = 'hierarchy' | 'timeline';
+export type CpuTab = 'hierarchy' | 'timeline' | 'left-heavy';
 type MemTab = 'simple' | 'detailed';
 
 /** 选中帧的模块详情：还原 Unity Profiler 底部面板。 */
-export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = false }: Props) {
-  const [cpuTab, setCpuTab] = useState<CpuTab>('hierarchy');
+export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = false, getTimeline, timelineSelection = -1, timelineFallback, onTimelineSeek, refreshTimeline,
+  getHeavyProfile, heavyRange, onHeavyRange, cpuTab: controlledCpuTab, onCpuTabChange, totalFrames = 0 }: Props) {
+  const [localCpuTab, setLocalCpuTab] = useState<CpuTab>('hierarchy');
+  const cpuTab = controlledCpuTab ?? localCpuTab;
+  const setCpuTab = onCpuTabChange ?? setLocalCpuTab;
   const [memTab, setMemTab] = useState<MemTab>('simple');
   const mod = moduleById(moduleId);
+  const timelineFrame = frame ?? timelineFallback?.frame;
 
   return (
     <div className="profiler-detail" data-testid="profiler-detail">
@@ -41,6 +57,7 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
           <div className="profiler-tabs" role="tablist" aria-label="CPU 视图">
             <button type="button" role="tab" aria-selected={cpuTab === 'hierarchy'} className={cpuTab === 'hierarchy' ? 'is-active' : ''} onClick={() => setCpuTab('hierarchy')}>Hierarchy</button>
             <button type="button" role="tab" aria-selected={cpuTab === 'timeline'} className={cpuTab === 'timeline' ? 'is-active' : ''} onClick={() => setCpuTab('timeline')}>Timeline</button>
+            {getHeavyProfile && <button type="button" role="tab" aria-selected={cpuTab === 'left-heavy'} className={cpuTab === 'left-heavy' ? 'is-active' : ''} onClick={() => setCpuTab('left-heavy')}>Left Heavy</button>}
           </div>
         )}
         {moduleId === 'memory' && (
@@ -51,10 +68,14 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
         )}
       </div>
       <div className="profiler-detail-body">
-        {!frame ? (
+        {moduleId === 'cpu' && cpuTab === 'timeline' && timelineFrame ? (
+          <TimelineDetail frame={timelineFrame} hierarchy={hierarchy} load={getTimeline} seek={onTimelineSeek}
+            index={frame ? timelineSelection : (timelineFallback?.index ?? timelineSelection)} refresh={refreshTimeline} />
+        ) : !frame ? (
           <p className="dim">选择一帧以查看详情</p>
-        ) : moduleId === 'cpu' && cpuTab === 'timeline' ? (
-          <CpuTimeline frame={frame} hierarchy={hierarchy} />
+        ) : moduleId === 'cpu' && cpuTab === 'left-heavy' && getHeavyProfile && onHeavyRange ? (
+          <CpuLeftHeavy range={heavyRange ?? { start: timelineSelection, end: timelineSelection }}
+            totalFrames={totalFrames} load={getHeavyProfile} onSelectRange={onHeavyRange} />
         ) : moduleId === 'cpu' && cpuTab === 'hierarchy' && hierarchy.length > 0 ? (
           <SampleHierarchy nodes={hierarchy} callStacks={callStacks} />
         ) : moduleId === 'memory' && memTab === 'detailed' ? (
@@ -102,6 +123,47 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
       </div>
     </div>
   );
+}
+
+function TimelineDetail({ frame, hierarchy, load, index, refresh, seek }: {
+  frame: FrameData;
+  hierarchy: SampleNode[];
+  load?: (index: number, frameIndex: number) => Promise<CpuTimelineFrame[]>;
+  index: number;
+  refresh?: boolean;
+  seek?: (index: number) => void;
+}) {
+  const [loaded, setLoaded] = useState<{ index: number; frameIndex: number; rows: CpuTimelineFrame[] }>();
+  const frameIndex = frame.frameIndex;
+  const context = loaded?.index === index && loaded.frameIndex === frameIndex ? loaded.rows : undefined;
+  useEffect(() => {
+    if (!load) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let remainingRefreshes = refresh ? 4 : 0;
+    const fetchThreads = async () => {
+      try {
+        const rows = await load(index, frameIndex);
+        if (active) setLoaded({ index, frameIndex, rows });
+      } catch {
+        if (active) setLoaded((previous) => previous?.index === index && previous.frameIndex === frameIndex ? previous : { index, frameIndex, rows: [] });
+      } finally {
+        if (active && remainingRefreshes > 0) {
+          remainingRefreshes--;
+          timer = setTimeout(() => { void fetchThreads(); }, 500);
+        }
+      }
+    };
+    void fetchThreads();
+    return () => { active = false; clearTimeout(timer); };
+  }, [load, index, frameIndex, refresh]);
+  const selectNeighbor = seek && context ? (neighbor: CpuTimelineFrame) => {
+    const center = context.findIndex((candidate) => candidate.selected);
+    const position = context.indexOf(neighbor);
+    if (center >= 0 && position >= 0) seek(index + position - center);
+  } : undefined;
+  return <CpuTimeline frame={frame} hierarchy={load ? [] : hierarchy} context={context}
+    loadingContext={!!load && context === undefined} onSelectNeighbor={selectNeighbor} />;
 }
 
 function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStacks: boolean }) {
@@ -267,7 +329,7 @@ function SampleHierarchy({ nodes, callStacks }: { nodes: SampleNode[]; callStack
                       ) : (
                         <span className="hierarchy-toggle is-leaf" />
                       )}
-                      <span className="swatch" style={{ background: categoryColor(r.node.category) }} />
+                      <span className="swatch" style={{ background: categoryColor(r.node.category, r.node.name) }} />
                       <span className="hierarchy-name" title={r.node.name}>{r.node.name}</span>
                     </span>
                   </td>

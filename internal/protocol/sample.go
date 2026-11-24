@@ -9,9 +9,24 @@ type SampleNode struct {
 	SelfMs   float32 `json:"selfMs"`
 	Calls    uint32  `json:"calls"`
 	// StartMs 相对本帧起点的开始时间，供 Timeline 按真实时序摆放；Hierarchy 合并后取最早一次。
-	StartMs float32 `json:"startMs,omitempty"`
+	StartMs float32 `json:"startMs"`
 	// GCAllocKB 含子树分配量（与 Unity Profiler 的 GC Alloc 列一致），不是仅自身。
 	GCAllocKB float32      `json:"gcAllocKB"`
 	Callstack []string     `json:"callstack,omitempty"`
 	Children  []SampleNode `json:"children,omitempty"`
+}
+
+type TimelineThread struct {
+	ID       string       `json:"id"`
+	Name     string       `json:"name"`
+	OffsetMs float64      `json:"offsetMs"`
+	Samples  []SampleNode `json:"samples"`
+}
+
+type TimelineFrame struct {
+	FrameIndex uint64           `json:"frameIndex"`
+	OffsetMs   float64          `json:"offsetMs"`
+	DurationMs float64          `json:"durationMs"`
+	Selected   bool             `json:"selected"`
+	Threads    []TimelineThread `json:"threads"`
 }

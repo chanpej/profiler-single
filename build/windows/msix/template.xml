@@ -8,15 +8,15 @@
         AllowPromptForPassword="false">
     </Settings>
     <Installer
-        Path="unityperfagent.exe"
+        Path="unityperf.exe"
         Arguments=""
-        InstallLocation="C:\Program Files\UnityPerfAgent\UnityPerfAgent">
+        InstallLocation="C:\Program Files\unityperf\unityperf">
     </Installer>
     <PackageInformation
-        PackageName="UnityPerfAgent"
-        PackageDisplayName="UnityPerfAgent"
-        PublisherName="CN=UnityPerfAgent"
-        PublisherDisplayName="UnityPerfAgent"
+        PackageName="unityperf"
+        PackageDisplayName="unityperf"
+        PublisherName="CN=unityperf"
+        PublisherDisplayName="unityperf"
         Version="0.1.0.0"
         PackageDescription="Standalone Unity performance analysis tool">
         <Capabilities>
@@ -25,10 +25,10 @@
         </Capabilities>
         <Applications>
             <Application
-                Id="com.unityperfagent.app"
+                Id="com.unityperf.app"
                 Description="Standalone Unity performance analysis tool"
-                DisplayName="UnityPerfAgent"
-                ExecutableName="unityperfagent.exe"
+                DisplayName="unityperf"
+                ExecutableName="unityperf.exe"
                 EntryPoint="Windows.FullTrustApplication">
                 
             </Application>
@@ -41,13 +41,13 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>UnityPerfAgent</DisplayName>
-            <PublisherDisplayName>UnityPerfAgent</PublisherDisplayName>
+            <DisplayName>unityperf</DisplayName>
+            <PublisherDisplayName>unityperf</PublisherDisplayName>
             <Description>Standalone Unity performance analysis tool</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>
     </PackageInformation>
-    <SaveLocation PackagePath="unityperfagent.msix" />
+    <SaveLocation PackagePath="unityperf.msix" />
     <PackageIntegrity>
         <CertificatePath></CertificatePath>
     </PackageIntegrity>

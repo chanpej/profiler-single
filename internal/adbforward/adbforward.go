@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"unityperfagent/internal/procutil"
-	"unityperfagent/internal/unityprofiler"
+	"unityperf/internal/procutil"
+	"unityperf/internal/unityprofiler"
 )
 
 // Runner 执行一条 adb 命令，返回合并后的 stdout/stderr。

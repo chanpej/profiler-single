@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { Bot } from 'lucide-react';
-import type { FrameData } from '../types';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { FrameData, FrameRange } from '../types';
 import { adjustCpuChartMax, chartMax, DEFAULT_CPU_CHART_MAX_Y, extractModuleSeries, formatChartAxisValue, memoryMetricAvailable, type ModuleDef } from '../lib/profiler';
 import { formatProfilerValue } from '../lib/format';
+import { drawCpuAreas, moveChartSeries } from '../lib/cpuChart';
 
 interface Props {
   module: ModuleDef;
@@ -11,13 +11,14 @@ interface Props {
   active: boolean;
   height?: number;
   onSelectFrame: (index: number) => void;
+  frameRange?: FrameRange;
+  onSelectRange?: (range: FrameRange) => void;
   onActivate: () => void;
   /** 仅激活模块的左侧信息区显示此入口。 */
-  onInsertReference?: () => void;
   onWheel?: (e: React.WheelEvent<HTMLElement>) => void;
-  /** 可调纵轴的手动上限；缺省时使用 100。 */
+  /** 可调纵轴的手动上限。 */
   yAxisMax?: number;
-  onYAxisMaxChange?: (max: number) => void;
+  onYAxisMaxChange?: (max: number | undefined) => void;
   /** 轨道显隐会改变 Canvas 可用空间，版本变更时必须重新测量绘制。 */
   layoutRevision?: string;
   /** 轨道应随可用区域变化填满自己的分配空间。 */
@@ -57,20 +58,32 @@ function memoryMetricForSeries(id: string): MemoryMetricId | null {
  * 点击或拖拽图表选帧，点击整行激活该模块的详情面板。
  */
 export function ProfilerChart({
-  module, frames, selectedIndex, active, height, onSelectFrame, onActivate, onInsertReference, onWheel,
+  module, frames, selectedIndex, active, height, onSelectFrame, frameRange, onSelectRange, onActivate, onWheel,
   yAxisMax, onYAxisMaxChange, layoutRevision, fillAvailableHeight = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef(false);
+  const [rangeDraft, setRangeDraft] = useState<{ anchor: number; end: number } | null>(null);
+  const rangeStart = rangeDraft ? Math.min(rangeDraft.anchor, rangeDraft.end) : frameRange?.start;
+  const rangeEnd = rangeDraft ? Math.max(rangeDraft.anchor, rangeDraft.end) : frameRange?.end;
   const axisDrag = useRef<{ lastY: number } | null>(null);
   const series = useMemo(() => extractModuleSeries(module, frames), [module, frames]);
-  const autoMaxY = useMemo(() => chartMax(module, series), [module, series]);
+  const [seriesOrder, setSeriesOrder] = useState(() => module.categories.map((category) => category.id));
+  const [hiddenSeries, setHiddenSeries] = useState<string[]>([]);
+  const draggedSeries = useRef<string | null>(null);
   const selectedFrame = frames[selectedIndex];
   const isMemory = module.id === 'memory';
   const isCpu = module.id === 'cpu';
+  const legendSeries = useMemo(() => isCpu
+    ? [...series].sort((first, second) => seriesOrder.indexOf(first.id) - seriesOrder.indexOf(second.id))
+    : series, [isCpu, series, seriesOrder]);
+  const plottedSeries = useMemo(() => isCpu
+    ? legendSeries.filter((item) => !hiddenSeries.includes(item.id))
+    : series, [hiddenSeries, isCpu, legendSeries, series]);
+  const autoMaxY = useMemo(() => chartMax(module, plottedSeries), [module, plottedSeries]);
   const supportsAdjustableYAxis = isCpu || module.id === 'gpu' || module.id === 'rendering';
-  const maxY = supportsAdjustableYAxis ? (yAxisMax ?? DEFAULT_CPU_CHART_MAX_Y) : autoMaxY;
+  const maxY = yAxisMax ?? autoMaxY;
   const yAxisMaxRef = useRef(maxY);
   const supportsOverflowIndicator = supportsAdjustableYAxis;
   const chartHeight = height ?? (isMemory ? 170 : 88);
@@ -78,11 +91,11 @@ export function ProfilerChart({
     if (!supportsOverflowIndicator) return 0;
     return frames.reduce((count, _, i) => {
       const value = module.stacked
-        ? series.reduce((sum, s) => sum + Math.max(0, s.values[i] || 0), 0)
-        : series.reduce((peak, s) => Math.max(peak, s.values[i] || 0), 0);
+        ? plottedSeries.reduce((sum, s) => sum + Math.max(0, s.values[i] || 0), 0)
+        : plottedSeries.reduce((peak, s) => Math.max(peak, s.values[i] || 0), 0);
       return count + (value > maxY ? 1 : 0);
     }, 0);
-  }, [frames, maxY, module.stacked, series, supportsOverflowIndicator]);
+  }, [frames, maxY, module.stacked, plottedSeries, supportsOverflowIndicator]);
   const headline = selectedFrame && isMemory
     ? (memoryMetricAvailable(selectedFrame, 'totalUsed')
       ? module.headline(selectedFrame)
@@ -123,8 +136,9 @@ export function ProfilerChart({
       const axisW = Y_AXIS_WIDTH;
       const plotX = axisW;
       const plotW = w - axisW;
+      if (plotW <= 0) return;
 
-      if (module.id === 'cpu' || module.id === 'gpu') {
+      if (module.id === 'gpu') {
         ctx.font = '9px Menlo, Consolas, monospace';
         ctx.fillStyle = LABEL;
         for (const ref of [16.7, 33.3]) {
@@ -162,10 +176,15 @@ export function ProfilerChart({
       ctx.beginPath();
       ctx.rect(plotX, padTop, plotW, plotH);
       ctx.clip();
-      if (isMemory) {
+      if (isCpu) {
+        drawCpuAreas(ctx, plottedSeries, frames.map((frame) => frame.frameIndex), {
+          left: plotX, bottom: padTop + plotH, width: plotW, height: plotH, max: maxY,
+        });
+      } else if (isMemory) {
         // Memory 模块与 CPU 的堆叠区不同：Editor 将异单位的计数器画成独立折线。
         for (const s of series) {
           const metric = memoryMetricForSeries(s.id);
+          ctx.fillStyle = s.color;
           ctx.strokeStyle = s.color;
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -175,8 +194,12 @@ export function ProfilerChart({
               drawing = false;
               continue;
             }
-            const x = frames.length === 1 ? plotX : plotX + (i / (frames.length - 1)) * plotW;
             const y = padTop + plotH - ((s.values[i] || 0) / maxY) * plotH;
+            if (frames.length === 1) {
+              ctx.fillRect(plotX + plotW / 2 - 1.5, y - 1.5, 3, 3);
+              continue;
+            }
+            const x = plotX + (i / (frames.length - 1)) * plotW;
             if (!drawing) {
               ctx.moveTo(x, y);
               drawing = true;
@@ -213,12 +236,31 @@ export function ProfilerChart({
 
       ctx.restore();
 
+      if (isCpu) {
+        ctx.font = '9px Menlo, Consolas, monospace';
+        for (const fps of [60, 30]) {
+          const y = padTop + plotH - (1000 / fps / maxY) * plotH;
+          if (y < padTop || y > padTop + plotH) continue;
+          ctx.strokeStyle = GRID;
+          ctx.beginPath();
+          ctx.moveTo(plotX, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+          const label = `${fps} FPS`;
+          const textY = Math.max(13, y - 2);
+          ctx.fillStyle = 'rgba(14, 17, 23, 0.85)';
+          ctx.fillRect(plotX + 3, textY - 8, ctx.measureText(label).width + 4, 10);
+          ctx.fillStyle = SELECT;
+          ctx.fillText(label, plotX + 5, textY);
+        }
+      }
+
       // 当帧值超过手动上限时，柱体保持等比裁切，并以高对比红色顶端帽线标识。
       if (supportsOverflowIndicator) {
         for (let i = 0; i < frames.length; i++) {
           const value = module.stacked
-            ? series.reduce((sum, s) => sum + Math.max(0, s.values[i] || 0), 0)
-            : series.reduce((peak, s) => Math.max(peak, s.values[i] || 0), 0);
+            ? plottedSeries.reduce((sum, s) => sum + Math.max(0, s.values[i] || 0), 0)
+            : plottedSeries.reduce((peak, s) => Math.max(peak, s.values[i] || 0), 0);
           if (value <= maxY) continue;
           const x = plotX + i * barW;
           const markWidth = Math.max(barW, 1);
@@ -240,6 +282,14 @@ export function ProfilerChart({
         }
       }
 
+      if (rangeStart !== undefined && rangeEnd !== undefined && rangeEnd >= 0 && rangeStart < frames.length) {
+        const left = plotX + Math.max(0, rangeStart) * barW;
+        const right = plotX + Math.min(frames.length, rangeEnd + 1) * barW;
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.2)';
+        ctx.fillRect(left, 0, right - left, h);
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+        ctx.strokeRect(left + 0.5, 0.5, Math.max(0, right - left - 1), h - 1);
+      }
       if (selectedIndex >= 0 && selectedIndex < frames.length) {
         const x = plotX + selectedIndex * barW + barW / 2;
         ctx.strokeStyle = SELECT;
@@ -262,12 +312,12 @@ export function ProfilerChart({
       ro.disconnect();
       window.removeEventListener('resize', draw);
     };
-  }, [chartHeight, fillAvailableHeight, frames, isCpu, layoutRevision, maxY, module, selectedIndex, series, supportsOverflowIndicator]);
+  }, [chartHeight, fillAvailableHeight, frames, isCpu, isMemory, layoutRevision, maxY, module, plottedSeries, rangeEnd, rangeStart, selectedIndex, series, supportsOverflowIndicator]);
 
   const pick = (clientX: number) => {
-    if (!wrapRef.current || frames.length === 0) return;
+    if (!wrapRef.current || frames.length === 0) return null;
     const rect = wrapRef.current.getBoundingClientRect();
-    onSelectFrame(indexFromClick(clientX, rect.left + Y_AXIS_WIDTH, rect.width - Y_AXIS_WIDTH, frames.length));
+    return indexFromClick(clientX, rect.left + Y_AXIS_WIDTH, Math.max(1, rect.width - Y_AXIS_WIDTH), frames.length);
   };
 
   const adjustYAxis = (delta: number) => {
@@ -275,6 +325,11 @@ export function ProfilerChart({
     const next = adjustCpuChartMax(yAxisMaxRef.current, delta);
     yAxisMaxRef.current = next;
     onYAxisMaxChange(next);
+  };
+
+  const resetYAxis = () => {
+    yAxisMaxRef.current = autoMaxY;
+    onYAxisMaxChange?.(isCpu ? undefined : DEFAULT_CPU_CHART_MAX_Y);
   };
 
   return (
@@ -291,33 +346,55 @@ export function ProfilerChart({
       <div className="profiler-chart-meta">
         <div className="profiler-chart-title-row">
           <div className="profiler-chart-title">{module.label}</div>
-          {active && onInsertReference && (
-            <button
-              type="button"
-              className="btn ghost profiler-chart-reference"
-              aria-label={`插入 ${module.label} 到 Agent Chat`}
-              title={`插入 ${module.label} 引用到 Agent Chat`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onInsertReference();
-              }}
-            >
-              <Bot size={13} aria-hidden />
-            </button>
-          )}
         </div>
         <div className="profiler-chart-headline mono">
           {headline ? formatProfilerValue(headline.value, headline.unit) : '--'}
         </div>
         <ul className="profiler-legend">
-          {series.map((s) => {
+          {legendSeries.map((s) => {
             const value = s.values[selectedIndex];
             const metric = memoryMetricForSeries(s.id);
             const available = !isMemory || !selectedFrame || !metric || memoryMetricAvailable(selectedFrame, metric);
             return (
               <li key={s.id} className={available ? '' : 'is-unavailable'}>
-                <span className="swatch" style={{ background: s.color }} />
-                <span className="profiler-legend-label">{s.label}</span>
+                {isCpu ? (
+                  <button
+                    type="button"
+                    className="profiler-legend-toggle"
+                    aria-pressed={!hiddenSeries.includes(s.id)}
+                    draggable
+                    title="点击切换显示，拖动调整堆叠顺序"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setHiddenSeries((current) => current.includes(s.id)
+                        ? current.filter((id) => id !== s.id) : [...current, s.id]);
+                    }}
+                    onDragStart={(event) => {
+                      draggedSeries.current = s.id;
+                      event.dataTransfer.setData('text/plain', s.id);
+                      event.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragOver={(event) => {
+                      if (draggedSeries.current !== null) event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      const source = draggedSeries.current;
+                      if (source === null) return;
+                      event.preventDefault();
+                      draggedSeries.current = null;
+                      setSeriesOrder((current) => moveChartSeries(current, source, s.id));
+                    }}
+                    onDragEnd={() => { draggedSeries.current = null; }}
+                  >
+                    <span className="swatch" style={{ background: s.color }} />
+                    <span className="profiler-legend-label">{s.label}</span>
+                  </button>
+                ) : (
+                  <>
+                    <span className="swatch" style={{ background: s.color }} />
+                    <span className="profiler-legend-label">{s.label}</span>
+                  </>
+                )}
                 <span className="mono profiler-legend-val">
                   {available && value != null ? formatProfilerValue(value, s.unit) : '—'}
                 </span>
@@ -329,24 +406,39 @@ export function ProfilerChart({
       <div
         ref={wrapRef}
         className="profiler-chart-canvas"
-        title={isCpu ? '滚轮缩放时间轴，Shift+滚轮平移；左侧 Y 轴可拖动或滚动调整上限' : '滚轮缩放，Shift+滚轮平移'}
+        data-frame-range={rangeStart !== undefined && rangeEnd !== undefined ? `${rangeStart}:${rangeEnd}` : undefined}
+        title={isCpu ? 'Shift+拖动框选 Left Heavy 帧范围 · 滚轮缩放时间轴' : '滚轮缩放，Shift+滚轮平移'}
         onWheel={onWheel}
         onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          const index = pick(e.clientX);
+          if (index === null) return;
           e.stopPropagation();
           onActivate();
-          dragging.current = true;
-          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-          pick(e.clientX);
+          e.currentTarget.setPointerCapture?.(e.pointerId);
+          if (e.shiftKey && onSelectRange) {
+            setRangeDraft({ anchor: index, end: index });
+          } else {
+            dragging.current = true;
+            onSelectFrame(index);
+          }
         }}
         onPointerMove={(e) => {
-          if (!dragging.current) return;
-          pick(e.clientX);
+          const index = pick(e.clientX);
+          if (index === null) return;
+          if (rangeDraft) setRangeDraft({ ...rangeDraft, end: index });
+          else if (dragging.current) onSelectFrame(index);
         }}
-        onPointerUp={() => {
+        onPointerUp={(e) => {
           dragging.current = false;
+          if (!rangeDraft) return;
+          const end = pick(e.clientX) ?? rangeDraft.end;
+          onSelectRange?.({ start: Math.min(rangeDraft.anchor, end), end: Math.max(rangeDraft.anchor, end) });
+          setRangeDraft(null);
         }}
         onPointerCancel={() => {
           dragging.current = false;
+          setRangeDraft(null);
         }}
       >
         <canvas ref={canvasRef} />
@@ -360,7 +452,7 @@ export function ProfilerChart({
             aria-valuemax={60000}
             aria-valuenow={Math.round(maxY * 100) / 100}
             aria-valuetext={`${maxY.toFixed(2)}ms`}
-            title="向上拖动或向上滚动以缩小上限；向下以扩大；双击恢复 100ms"
+            title={isCpu ? '拖动或滚动调整上限，双击恢复自动比例' : '拖动或滚动调整上限，双击恢复 100ms'}
             onWheel={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -369,8 +461,7 @@ export function ProfilerChart({
             onDoubleClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              yAxisMaxRef.current = DEFAULT_CPU_CHART_MAX_Y;
-              onYAxisMaxChange?.(DEFAULT_CPU_CHART_MAX_Y);
+              resetYAxis();
             }}
             onPointerDown={(e) => {
               e.preventDefault();
@@ -398,8 +489,7 @@ export function ProfilerChart({
                 adjustYAxis(20);
               } else if (e.key === 'Home') {
                 e.preventDefault();
-                yAxisMaxRef.current = DEFAULT_CPU_CHART_MAX_Y;
-                onYAxisMaxChange?.(DEFAULT_CPU_CHART_MAX_Y);
+                resetYAxis();
               }
             }}
           />

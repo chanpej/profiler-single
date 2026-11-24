@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 // 以下固件全部截自 Unity 2022.3 Editor 与 Android 真机（示例游戏，包 com.company.game）

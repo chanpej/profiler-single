@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/protocol"
 )
 
 func TestLoadOfficialUnity2022Data(t *testing.T) {

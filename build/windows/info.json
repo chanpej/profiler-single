@@ -5,10 +5,10 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "UnityPerfAgent",
+			"CompanyName": "unityperf",
 			"FileDescription": "Standalone Unity performance analysis tool",
 			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "UnityPerfAgent",
+			"ProductName": "unityperf",
 			"Comments": "This is a comment"
 		}
 	}

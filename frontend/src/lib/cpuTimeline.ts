@@ -1,6 +1,5 @@
-import type { FrameData, SampleNode } from '../types';
+import type { CpuThreadSamples, CpuTimelineFrame, FrameData, SampleNode } from '../types';
 import { categoryColor } from './hierarchy';
-import { moduleById, moduleBreakdown } from './profiler';
 
 /** 左侧线程名列宽，贴近 Unity Profiler Timeline。 */
 export const THREAD_LABEL_W = 108;
@@ -18,16 +17,22 @@ const ZOOM_OUT = 1.25;
 export interface TimelineBar {
   id: string;
   path: string;
+  samplePath?: string[];
   name: string;
   category: string;
   color: string;
   startMs: number;
   durationMs: number;
+  selfMs?: number;
+  calls?: number;
+  callstack?: string[];
   depth: number;
   thread: string;
+  ghost?: boolean;
 }
 
 export interface TimelineThread {
+  id: string;
   name: string;
   bars: TimelineBar[];
   maxDepth: number;
@@ -42,6 +47,7 @@ export interface TimeWindow {
 
 export interface TimelineLayout {
   threads: TimelineThread[];
+  startMs: number;
   totalMs: number;
 }
 
@@ -53,38 +59,37 @@ export function windowEnd(win: TimeWindow): number {
   return win.startMs + win.spanMs;
 }
 
-export function fitWindow(totalMs: number): TimeWindow {
-  const span = Math.max(totalMs, MIN_SPAN_MS);
-  return { startMs: 0, spanMs: span };
+export function fitWindow(totalMs: number, startMs = 0): TimeWindow {
+  return { startMs, spanMs: Math.max(totalMs - startMs, MIN_SPAN_MS) };
 }
 
-export function clampWindow(win: TimeWindow, totalMs: number): TimeWindow {
-  const maxSpan = Math.max(totalMs, MIN_SPAN_MS);
+export function clampWindow(win: TimeWindow, totalMs: number, minimum = 0): TimeWindow {
+  const maxSpan = Math.max(totalMs - minimum, MIN_SPAN_MS);
   const spanMs = Math.min(maxSpan, Math.max(MIN_SPAN_MS, win.spanMs));
-  const maxStart = Math.max(0, maxSpan - spanMs);
-  const startMs = Math.min(maxStart, Math.max(0, win.startMs));
+  const maxStart = minimum + maxSpan - spanMs;
+  const startMs = Math.min(maxStart, Math.max(minimum, win.startMs));
   return { startMs, spanMs };
 }
 
 /**
  * 围绕 anchorMs 缩放。factor < 1 放大（更短窗口），> 1 缩小。
  */
-export function zoomWindow(win: TimeWindow, totalMs: number, factor: number, anchorMs: number): TimeWindow {
+export function zoomWindow(win: TimeWindow, totalMs: number, factor: number, anchorMs: number, minimum = 0): TimeWindow {
   const spanMs = win.spanMs * factor;
   const ratio = win.spanMs <= 0 ? 0 : (anchorMs - win.startMs) / win.spanMs;
   const startMs = anchorMs - ratio * spanMs;
-  return clampWindow({ startMs, spanMs }, totalMs);
+  return clampWindow({ startMs, spanMs }, totalMs, minimum);
 }
 
-export function panWindow(win: TimeWindow, totalMs: number, deltaMs: number): TimeWindow {
-  return clampWindow({ ...win, startMs: win.startMs + deltaMs }, totalMs);
+export function panWindow(win: TimeWindow, totalMs: number, deltaMs: number, minimum = 0): TimeWindow {
+  return clampWindow({ ...win, startMs: win.startMs + deltaMs }, totalMs, minimum);
 }
 
 /** 双击采样：把该条放到视野中央并略留边。 */
-export function zoomToBar(bar: TimelineBar, totalMs: number): TimeWindow {
+export function zoomToBar(bar: TimelineBar, totalMs: number, minimum = 0): TimeWindow {
   const pad = Math.max(bar.durationMs * 0.2, MIN_SPAN_MS * 0.5);
   const spanMs = Math.max(bar.durationMs + pad * 2, MIN_SPAN_MS);
-  return clampWindow({ startMs: bar.startMs - pad, spanMs }, totalMs);
+  return clampWindow({ startMs: bar.startMs - pad, spanMs }, totalMs, minimum);
 }
 
 export function wheelZoomFactor(deltaY: number): number {
@@ -100,6 +105,15 @@ export function msFromX(x: number, plotW: number, win: TimeWindow): number {
 export function xFromMs(ms: number, plotW: number, win: TimeWindow): number {
   if (win.spanMs <= 0) return 0;
   return ((ms - win.startMs) / win.spanMs) * plotW;
+}
+
+export function projectSample(bar: TimelineBar, plotW: number, win: TimeWindow) {
+  const start = xFromMs(bar.startMs, plotW, win);
+  const end = xFromMs(barEnd(bar), plotW, win);
+  if (end < 0 || start >= plotW || (end === 0 && start < 0)) return null;
+  const left = Math.max(0, start);
+  const right = Math.min(plotW, Math.max(end, left + 1));
+  return { left, right, continuesLeft: start < 0, continuesRight: end > plotW };
 }
 
 export function threadHeight(maxDepth: number): number {
@@ -152,138 +166,87 @@ function formatTick(ms: number, _step: number): string {
   return `${ms.toFixed(2)}ms`;
 }
 
-function hasTimedSamples(nodes: SampleNode[]): boolean {
-  const walk = (list: SampleNode[]): boolean => list.some((n) => {
-    if ((n.startMs ?? 0) > 0) return true;
-    return n.children ? walk(n.children) : false;
-  });
-  return walk(nodes);
-}
-
 function layoutNode(
   node: SampleNode,
-  cursor: number,
+  lane: CpuThreadSamples,
   depth: number,
-  thread: string,
-  prefix: string,
-  timed: boolean,
+  parentPath: string[],
   bars: TimelineBar[],
-): number {
-  const path = prefix ? `${prefix}/${node.name}` : node.name;
+): void {
+  const samplePath = [...parentPath, node.name];
+  const path = samplePath.join('/');
   const duration = Math.max(0, node.totalMs);
-  const start = timed ? (node.startMs ?? cursor) : cursor;
-  const id = `${thread}:${path}@${start.toFixed(4)}:${bars.length}`;
-  bars.push({
+  const start = lane.offsetMs + (node.startMs ?? 0);
+  const id = `${lane.id}:${path}@${start.toFixed(4)}:${bars.length}`;
+  if (node.startMs !== undefined) bars.push({
     id,
     path,
+    samplePath,
     name: node.name,
     category: node.category,
-    color: categoryColor(node.category),
+    color: categoryColor(node.category, node.name),
     startMs: start,
     durationMs: duration,
+    selfMs: node.selfMs,
+    calls: node.calls,
+    callstack: node.callstack,
     depth,
-    thread,
+    thread: lane.name,
   });
-  let childCursor = start;
   for (const child of node.children ?? []) {
-    childCursor = layoutNode(child, childCursor, depth + 1, thread, path, timed, bars);
+    layoutNode(child, lane, node.startMs === undefined ? depth : depth + 1, samplePath, bars);
   }
-  return timed ? start + duration : Math.max(start + duration, childCursor);
 }
 
 function maxDepthOf(bars: TimelineBar[]): number {
   return bars.reduce((m, b) => Math.max(m, b.depth), 0);
 }
 
-function threadFromRootName(name: string): string | null {
-  const n = name.trim();
-  if (/thread/i.test(n) || /job/i.test(n) || /worker/i.test(n)) return n;
-  return null;
+export function layoutTimeline(nodes: SampleNode[], frame: FrameData | null, threadSamples?: CpuThreadSamples[]): TimelineLayout {
+  const lanes = threadSamples ?? [{ id: 'main', name: 'Main Thread', offsetMs: 0, samples: nodes }];
+  const threads: TimelineThread[] = [];
+  for (const lane of lanes) {
+    const bars: TimelineBar[] = [];
+    for (const root of lane.samples) layoutNode(root, lane, 0, [], bars);
+    if (bars.length > 0) threads.push({ id: lane.id, name: lane.name, bars, maxDepth: maxDepthOf(bars) });
+  }
+  let startMs = 0;
+  let totalMs = Math.max(frame?.mainThreadMs || 0, frame?.cpuTimeMs || 0);
+  for (const th of threads) {
+    for (const bar of th.bars) {
+      startMs = Math.min(startMs, bar.startMs);
+      totalMs = Math.max(totalMs, barEnd(bar));
+    }
+  }
+  return { threads, startMs, totalMs: Math.max(totalMs, MIN_SPAN_MS) };
 }
 
-/**
- * 把采样树铺成 Unity Timeline 式线程泳道。
- * 有 startMs 时按真实时序；否则在父节点内从左到右紧排子节点。
- */
-export function layoutTimeline(nodes: SampleNode[], frame: FrameData | null): TimelineLayout {
-  const timed = hasTimedSamples(nodes);
-  const byThread = new Map<string, TimelineBar[]>();
-  const order: string[] = [];
-  const ensure = (name: string) => {
-    if (!byThread.has(name)) {
-      byThread.set(name, []);
-      order.push(name);
-    }
-    return byThread.get(name)!;
-  };
-
-  if (nodes.length > 0) {
-    let fallbackCursor = 0;
-    for (const root of nodes) {
-      const thread = threadFromRootName(root.name) ?? 'Main Thread';
-      const bars = ensure(thread);
-      fallbackCursor = layoutNode(root, timed ? (root.startMs ?? 0) : fallbackCursor, 0, thread, '', timed, bars);
-    }
-    if (frame && frame.renderMs > 0 && !byThread.has('Render Thread')) {
-      ensure('Render Thread').push({
-        id: 'render',
-        path: 'Render Thread',
-        name: 'Render',
-        category: 'Render',
-        color: categoryColor('Render'),
-        startMs: 0,
-        durationMs: frame.renderMs,
-        depth: 0,
-        thread: 'Render Thread',
-      });
-    }
-  } else if (frame) {
-    const cats = moduleBreakdown(moduleById('cpu'), frame);
-    const mainBars = ensure('Main Thread');
-    let t = 0;
-    for (const c of cats) {
-      if (!(c.value > 0)) continue;
-      mainBars.push({
-        id: `cpu:${c.id}`,
-        path: c.label,
-        name: c.label,
-        category: c.id,
-        color: c.color,
-        startMs: t,
-        durationMs: c.value,
-        depth: 0,
-        thread: 'Main Thread',
-      });
-      t += c.value;
-    }
-    if (frame.renderMs > 0) {
-      ensure('Render Thread').push({
-        id: 'render',
-        path: 'Render Thread',
-        name: 'Render',
-        category: 'Render',
-        color: categoryColor('Render'),
-        startMs: 0,
-        durationMs: frame.renderMs,
-        depth: 0,
-        thread: 'Render Thread',
-      });
+export function layoutTimelineContext(current: TimelineLayout, context: CpuTimelineFrame[]): TimelineLayout {
+  if (!context.some((frame) => !frame.selected)) return current;
+  const threads = new Map(current.threads.map((thread) => [thread.id, { ...thread, bars: [] as TimelineBar[] }]));
+  let { startMs, totalMs } = current;
+  for (const frame of context) {
+    if (frame.selected) continue;
+    const layout = layoutTimeline([], null, frame.threads);
+    startMs = Math.min(startMs, frame.offsetMs + layout.startMs);
+    totalMs = Math.max(totalMs, frame.offsetMs + Math.max(frame.durationMs, layout.totalMs));
+    for (const thread of layout.threads) {
+      let lane = threads.get(thread.id);
+      if (!lane) {
+        lane = { ...thread, bars: [] };
+        threads.set(thread.id, lane);
+      }
+      lane.maxDepth = Math.max(lane.maxDepth, thread.maxDepth);
+      for (const bar of thread.bars) {
+        lane.bars.push({ ...bar, id: `${frame.frameIndex}:${bar.id}`, ghost: true, startMs: bar.startMs + frame.offsetMs });
+      }
     }
   }
-
-  const threads: TimelineThread[] = order.map((name) => {
-    const bars = byThread.get(name) ?? [];
-    return { name, bars, maxDepth: maxDepthOf(bars) };
-  });
-
-  let totalMs = 0;
-  for (const th of threads) {
-    for (const b of th.bars) totalMs = Math.max(totalMs, barEnd(b));
+  for (const thread of current.threads) {
+    const lane = threads.get(thread.id);
+    if (lane) lane.bars = lane.bars.concat(thread.bars);
   }
-  if (frame) {
-    totalMs = Math.max(totalMs, frame.mainThreadMs || 0, frame.cpuTimeMs || 0, frame.renderMs || 0);
-  }
-  return { threads, totalMs: Math.max(totalMs, MIN_SPAN_MS) };
+  return { startMs, totalMs, threads: [...threads.values()] };
 }
 
 export function hitTest(
@@ -294,8 +257,8 @@ export function hitTest(
   plotW: number,
   win: TimeWindow,
 ): TimelineBar | null {
-  if (y < RULER_H || plotW <= 0) return null;
-  const t = msFromX(x - plotLeft, plotW, win);
+  const plotX = x - plotLeft;
+  if (y < RULER_H || plotW <= 0 || plotX < 0 || plotX >= plotW) return null;
   let top = RULER_H;
   let best: TimelineBar | null = null;
   for (let i = 0; i < threads.length; i++) {
@@ -303,10 +266,11 @@ export function hitTest(
     const h = threadHeight(th.maxDepth);
     if (y >= top && y < top + h) {
       for (const bar of th.bars) {
-        if (t < bar.startMs || t > barEnd(bar)) continue;
+        if (bar.ghost || bar.depth > th.maxDepth) continue;
         const by = barY(top, bar.depth);
         if (y >= by && y < by + BAR_H) {
-          if (!best || bar.depth >= best.depth) best = bar;
+          const bounds = projectSample(bar, plotW, win);
+          if (bounds && plotX >= bounds.left && plotX < bounds.right) best = bar;
         }
       }
       return best;

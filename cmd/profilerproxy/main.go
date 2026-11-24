@@ -19,7 +19,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"unityperfagent/internal/profilerproxy"
+	"unityperf/internal/profilerproxy"
 )
 
 func main() {

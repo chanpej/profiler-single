@@ -1,15 +1,17 @@
 package unityprofiler
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf16"
 
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/protocol"
 )
 
 const (
-	maxHierarchyNodes = 1200
+	maxHierarchyNodes = 8192
 	nsPerMSHierarchy  = 1e6
 )
 
@@ -58,6 +60,42 @@ func rollUpGCAlloc(nodes []protocol.SampleNode) float32 {
 	return sum
 }
 
+func (info *markerInfo) recordField(index int, field string) {
+	if info.Name != "Profiler.Default" {
+		return
+	}
+	switch field {
+	case "Category":
+		info.categoryField = index + 1
+	case "Name":
+		info.nameField = index + 1
+	}
+}
+
+func (info markerInfo) sampleName(values []value) string {
+	if info.nameField == 0 || info.nameField > len(values) {
+		return info.Name
+	}
+	field := values[info.nameField-1]
+	var name string
+	switch field.Type {
+	case DataTypeString:
+		name = string(field.Raw)
+	case DataTypeString16:
+		if len(field.Raw)%2 == 0 {
+			units := make([]uint16, len(field.Raw)/2)
+			for index := range units {
+				units[index] = binary.LittleEndian.Uint16(field.Raw[2*index:])
+			}
+			name = string(utf16.Decode(units))
+		}
+	}
+	if name = strings.TrimRight(name, "\x00"); name != "" {
+		return name
+	}
+	return info.Name
+}
+
 func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.SampleNode {
 	if len(nodes) == 0 {
 		return nil
@@ -66,8 +104,16 @@ func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.Sam
 	for _, n := range nodes {
 		name, cat := "Sample", ""
 		if info, ok := d.meta.markers[n.markerID]; ok {
-			name = info.Name
-			cat = d.meta.categoryName(info.Category)
+			name = info.sampleName(n.meta)
+			category := info.Category
+			if field := info.categoryField; field > 0 && field <= len(n.meta) {
+				if value := n.meta[field-1]; value.Type == DataTypeUInt32 && len(value.Raw) == 4 {
+					if id := binary.LittleEndian.Uint32(value.Raw); id <= 65535 {
+						category = uint16(id)
+					}
+				}
+			}
+			cat = d.meta.categoryName(category)
 		}
 		s := protocol.SampleNode{
 			Name:     name,
@@ -83,7 +129,7 @@ func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.Sam
 			case DataTypeString, DataTypeString16:
 				// 字符串元数据是采样自带的说明文本（如 UI 元素名），不是调用栈。
 			default:
-				if num, ok := v.Number(); ok && strings.EqualFold(name, "GC.Alloc") {
+				if num, ok := v.Number(); ok && strings.EqualFold(d.meta.markers[n.markerID].Name, "GC.Alloc") {
 					s.GCAllocKB = float32(num / bytesPerKB)
 				}
 			}

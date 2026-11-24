@@ -62,7 +62,9 @@ describe('extractModuleSeries', () => {
     const series = extractModuleSeries(moduleById('cpu'), frames);
     const scripts = series.find((s) => s.id === 'scripts');
     expect(scripts?.values).toEqual([4, 8]);
-    expect(series).toHaveLength(8);
+    expect(series.map((item) => item.color)).toEqual([
+      '#7B9E05', '#3488A7', '#CC7000', '#5AB2BC', '#72680C', '#C5A206', '#882807', '#614985', '#7A7B1E',
+    ]);
   });
 });
 

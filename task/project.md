@@ -1,4 +1,4 @@
-UnityPerfAgent是一款独立于Unity Editor的性能分析工具，采用完全自研的独立真机Unity游戏的性能数据连接、采集、分析实现（获取Unity Editor Profiler一样的采集数据），并接入LLM能力，能进行自动化的性能分析诊断。
+unityperf是一款独立于Unity Editor的性能分析工具，采用完全自研的独立真机Unity游戏的性能数据连接、采集、分析实现（获取Unity Editor Profiler一样的采集数据），并支持本地规则分析。
 
 # 技术目的
 

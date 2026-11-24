@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/protocol"
 )
 
 // steadyFrames 生成 n 帧平稳的 60fps 数据。

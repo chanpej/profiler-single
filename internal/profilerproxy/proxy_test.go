@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"unityperfagent/internal/capture"
-	"unityperfagent/internal/unityprofiler"
+	"unityperf/internal/capture"
+	"unityperf/internal/unityprofiler"
 )
 
 func TestRelayForwardsBothDirectionsAndCapturesPD3U(t *testing.T) {

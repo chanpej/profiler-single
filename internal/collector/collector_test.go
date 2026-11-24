@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 func frameN(i int) protocol.FrameData {

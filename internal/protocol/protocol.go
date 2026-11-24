@@ -99,6 +99,7 @@ type FrameData struct {
 	CPUScriptsMs   float32 `json:"cpuScriptsMs"`
 	CPUPhysicsMs   float32 `json:"cpuPhysicsMs"`
 	CPUAnimationMs float32 `json:"cpuAnimationMs"`
+	CPULightingMs  float32 `json:"cpuLightingMs,omitempty"`
 	CPUGCMs        float32 `json:"cpuGcMs"`
 	CPUVSyncMs     float32 `json:"cpuVsyncMs"`
 	CPUUIMs        float32 `json:"cpuUiMs"`

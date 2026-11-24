@@ -1,5 +1,5 @@
 {
-  "name": "unityperfagent-frontend",
+  "name": "unityperf-frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,7 +12,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@assistant-ui/react": "0.15.15",
     "@tanstack/react-virtual": "^3.14.9",
     "@wailsio/runtime": "latest",
     "lucide-react": "^1.31.0",

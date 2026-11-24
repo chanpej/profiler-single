@@ -4,11 +4,11 @@
         <key>CFBundlePackageType</key>
             <string>APPL</string>
         <key>CFBundleName</key>
-            <string>UnityPerfAgent</string>
+            <string>unityperf</string>
         <key>CFBundleExecutable</key>
-            <string>unityperfagent.exe</string>
+            <string>unityperf.exe</string>
         <key>CFBundleIdentifier</key>
-            <string>com.unityperfagent.app</string>
+            <string>com.unityperf.app</string>
         <key>CFBundleVersion</key>
             <string>0.1.0</string>
         <key>CFBundleGetInfoString</key>

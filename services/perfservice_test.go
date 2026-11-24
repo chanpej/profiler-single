@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,16 +11,94 @@ import (
 	"testing"
 	"time"
 
-	"unityperfagent/internal/llm"
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
-	"unityperfagent/internal/unityprofiler"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
+	"unityperf/internal/unityprofiler"
 )
 
 const testPackageID = "com.company.game"
 
 func newTestService() *PerfService {
 	return NewPerfService()
+}
+
+func TestFrameTimelineContextUsesPlayerClock(t *testing.T) {
+	svc := newTestService()
+	appendFrame := func(index uint64, start, end int64, epoch int) {
+		svc.session.AppendFrame(profileframe.Frame{
+			Summary:       protocol.FrameData{FrameIndex: index, CPUTimeMs: 1},
+			MainThread:    []protocol.SampleNode{{Name: "PlayerLoop", TotalMs: 1}},
+			PlayerStartNS: start * 1_000_000,
+			PlayerEndNS:   end * 1_000_000,
+			ClockEpoch:    epoch,
+		})
+	}
+	appendFrame(10, 10, 18, 1)
+	appendFrame(11, 18, 30, 1)
+	appendFrame(14, 40, 55, 1)
+	appendFrame(15, 55, 64, 1)
+	appendFrame(16, 64, 79, 1)
+	appendFrame(17, 79, 90, 1)
+	appendFrame(18, 90, 99, 1)
+	appendFrame(19, 99, 110, 1)
+	appendFrame(20, 110, 125, 2)
+	got := svc.FrameTimelineContext(2, 14)
+	wantOffsets := []float64{-30, -22, 0, 15, 24, 39}
+	if len(got) != len(wantOffsets) {
+		t.Fatalf("context length = %d, want %d", len(got), len(wantOffsets))
+	}
+	for position, want := range wantOffsets {
+		if frame := got[position]; frame.OffsetMs != want || frame.Selected != (position == 2) || len(frame.Threads) != 1 {
+			t.Fatalf("frame %d = %+v, want offset %g", position, frame, want)
+		}
+	}
+	if got[2].DurationMs != 15 {
+		t.Fatalf("selected frame duration = %g, want 15", got[2].DurationMs)
+	}
+	if next := svc.FrameTimelineContext(7, 19); len(next) != 4 || next[len(next)-1].FrameIndex != 19 {
+		t.Fatalf("context crossed clock epochs: %+v", next)
+	}
+	if stale := svc.FrameTimelineContext(2, 13); len(stale) != 0 {
+		t.Fatalf("stale selection returned %+v", stale)
+	}
+}
+
+func TestFrameTimelineContextForLegacyCapture(t *testing.T) {
+	svc := newTestService()
+	for _, summary := range []protocol.FrameData{
+		{FrameIndex: 20, CPUTimeMs: 11},
+		{FrameIndex: 21, CPUTimeMs: 15},
+		{FrameIndex: 22, MainThreadMs: 19},
+		{FrameIndex: 24, CPUTimeMs: 17},
+	} {
+		svc.session.AppendFrame(profileframe.New(summary, nil))
+	}
+	got := svc.FrameTimelineContext(1, 21)
+	if len(got) != 3 || got[0].OffsetMs != -11 || got[1].OffsetMs != 0 || got[2].OffsetMs != 15 || got[2].DurationMs != 19 {
+		t.Fatalf("legacy timeline offsets = %+v", got)
+	}
+}
+
+func TestFrameTimelineContextFromCapture(t *testing.T) {
+	path := os.Getenv("UNITYPROFILER_TIMELINE_CAPTURE")
+	if path == "" {
+		t.Skip("set UNITYPROFILER_TIMELINE_CAPTURE to a real .upac capture")
+	}
+	svc := newTestService()
+	count, err := svc.ImportCapture(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 3; index+3 < count; index++ {
+		frameIndex := svc.FrameAt(index).FrameIndex
+		frames := svc.FrameTimelineContext(index, frameIndex)
+		if len(frames) == 7 && frames[3].Selected && frames[0].OffsetMs < 0 && frames[6].OffsetMs > 0 &&
+			len(frames[0].Threads) > 0 && len(frames[3].Threads) > 0 && len(frames[6].Threads) > 0 {
+			t.Logf("capture frames=%d selected=%d context range %.3fms to %.3fms", count, frameIndex, frames[0].OffsetMs, frames[6].OffsetMs+frames[6].DurationMs)
+			return
+		}
+	}
+	t.Fatalf("no selection with sampled frames on both sides in %d frames", count)
 }
 
 func TestConnectFailure(t *testing.T) {
@@ -34,218 +111,6 @@ func TestConnectFailure(t *testing.T) {
 	}
 	if svc.Status().Connected {
 		t.Fatal("should not be connected")
-	}
-}
-
-func TestLLMConfigRoundTrip(t *testing.T) {
-	svc := newTestService()
-	cfg := llm.Config{AgentCommand: "gemini", AgentArgs: []string{"--experimental-acp"}}
-	svc.SetLLMConfig(cfg)
-	got := svc.LLMConfig()
-	if got.AgentCommand != "gemini" || len(got.AgentArgs) != 1 {
-		t.Fatalf("cfg = %+v", got)
-	}
-	if got.ActiveID != "custom" {
-		t.Fatalf("active = %q", got.ActiveID)
-	}
-	if len(got.Agents) < 3 {
-		t.Fatalf("agents = %+v", got.Agents)
-	}
-}
-
-func TestLLMConfigDefaults(t *testing.T) {
-	svc := newTestService()
-	got := svc.LLMConfig()
-	if got.ActiveID != "codex" || len(got.Agents) != 2 {
-		t.Fatalf("defaults = %+v", got)
-	}
-	if got.AgentCommand != "codex" {
-		t.Fatalf("codex command = %q", got.AgentCommand)
-	}
-}
-
-func TestDiagnoseWithoutLLMConfig(t *testing.T) {
-	svc := newTestService()
-	_, err := svc.Diagnose(t.Context())
-	if err == nil {
-		t.Fatal("expected error without llm config")
-	}
-	if !strings.Contains(err.Error(), "not configured") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestMCPToolsReadCurrentSession(t *testing.T) {
-	svc := newTestService()
-	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 7, FPS: 55, CPUTimeMs: 18}, []protocol.SampleNode{{Name: "Main Thread", TotalMs: 18}}))
-
-	frames, err := svc.mcp.execute("performance_frames", json.RawMessage(`{"offset":0,"limit":1}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotFrames, ok := frames.([]protocol.FrameData)
-	if !ok || len(gotFrames) != 1 || gotFrames[0].FrameIndex != 7 {
-		t.Fatalf("frames = %#v", frames)
-	}
-
-	frame, err := svc.mcp.execute("performance_frame", json.RawMessage(`{"index":0,"includeHierarchy":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotFrame, ok := frame.(map[string]any)
-	if !ok || len(gotFrame["hierarchy"].([]protocol.SampleNode)) != 1 {
-		t.Fatalf("frame = %#v", frame)
-	}
-	if _, err := svc.mcp.execute("performance_frames", json.RawMessage(`{"offset":0,"limit":201}`)); err == nil {
-		t.Fatal("expected oversized MCP frame query to fail")
-	}
-}
-
-func TestMCPMemoryAndModuleAnalysis(t *testing.T) {
-	svc := newTestService()
-	svc.onFrame(profileframe.New(protocol.FrameData{
-		FrameIndex: 10, TimestampMs: 1_000, UsedMemMB: 100, CommittedMemMB: 120, GCUsedMB: 20,
-		TextureMemMB: 30, ObjectCount: 40, GCAllocatedFrameKB: 2,
-		MemoryCounterMask: protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted | protocol.MemoryCounterGCUsed | protocol.MemoryCounterTexture | protocol.MemoryCounterObjectCount | protocol.MemoryCounterGCAllocatedFrame,
-	}, nil))
-	svc.onFrame(profileframe.New(protocol.FrameData{
-		FrameIndex: 11, TimestampMs: 2_000, UsedMemMB: 115, CommittedMemMB: 130, GCUsedMB: 22,
-		TextureMemMB: 36, ObjectCount: 45, GCAllocatedFrameKB: 8,
-		MemoryCounterMask: protocol.MemoryCounterTotalUsed | protocol.MemoryCounterCommitted | protocol.MemoryCounterGCUsed | protocol.MemoryCounterTexture | protocol.MemoryCounterObjectCount | protocol.MemoryCounterGCAllocatedFrame,
-	}, nil))
-
-	value, err := svc.mcp.execute("performance_memory_analysis", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	memory := value.(map[string]any)
-	if memory["frameCount"] != 2 || memory["trend"].(map[string]any)["usedMemDeltaMB"] != 15.0 {
-		t.Fatalf("memory analysis = %#v", memory)
-	}
-	metrics := memory["metrics"].(map[string]mcpMetric)
-	if metrics["usedMemMB"].Max != 115 || metrics["gcAllocatedFrameKB"].PeakFrame != 11 {
-		t.Fatalf("memory metrics = %#v", metrics)
-	}
-
-	module, err := svc.mcp.execute("performance_module_analysis", json.RawMessage(`{"module":"memory"}`))
-	if err != nil || module.(map[string]any)["frameCount"] != 2 {
-		t.Fatalf("module analysis = %#v, err = %v", module, err)
-	}
-	if _, err := svc.mcp.execute("performance_module_analysis", json.RawMessage(`{"module":"unknown"}`)); err == nil {
-		t.Fatal("expected unknown module error")
-	}
-}
-
-func TestMCPFrameCompare(t *testing.T) {
-	svc := newTestService()
-	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 1, CPUTimeMs: 10, DrawCalls: 20}, nil))
-	svc.onFrame(profileframe.New(protocol.FrameData{FrameIndex: 2, CPUTimeMs: 16, DrawCalls: 25}, nil))
-	value, err := svc.mcp.execute("performance_frame_compare", json.RawMessage(`{"baselineIndex":0,"comparisonIndex":1}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	delta := value.(map[string]any)["delta"].(map[string]float64)
-	if delta["cpuTimeMs"] != 6 || delta["drawCalls"] != 5 {
-		t.Fatalf("delta = %#v", delta)
-	}
-}
-
-func TestAgentLogsKeepRecentEntries(t *testing.T) {
-	svc := newTestService()
-	for i := 0; i < agentLogCapacity+1; i++ {
-		svc.addAgentLog("Agent", "Agent → User", "response", fmt.Sprintf("%d", i))
-	}
-	logs := svc.AgentLogs()
-	if len(logs) != agentLogCapacity || logs[0].Payload != "1" {
-		t.Fatalf("logs = %d, first = %+v", len(logs), logs[0])
-	}
-	svc.ClearAgentLogs()
-	if len(svc.AgentLogs()) != 0 {
-		t.Fatal("logs should be empty after clearing")
-	}
-}
-
-func TestAgentChatSendWithoutConfig(t *testing.T) {
-	svc := newTestService()
-	_, err := svc.AgentChatSend(t.Context(), "hello")
-	if err == nil {
-		t.Fatal("expected error without llm config")
-	}
-	if !strings.Contains(err.Error(), "not configured") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestAgentChatSendEmptyMessage(t *testing.T) {
-	svc := newTestService()
-	if _, err := svc.AgentChatSend(t.Context(), "  "); err == nil {
-		t.Fatal("expected error for empty message")
-	}
-}
-
-func TestExportAgentChatRoundTrip(t *testing.T) {
-	svc := newTestService()
-	path := filepath.Join(t.TempDir(), "agent-chat.md")
-	content := "# Agent Chat\n\n**用户：** 请分析这一帧。\n\n**Agent：** CPU 主线程耗时较高。\n"
-	if err := svc.ExportAgentChat(path, content); err != nil {
-		t.Fatalf("ExportAgentChat: %v", err)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != content {
-		t.Fatalf("content = %q, want %q", got, content)
-	}
-}
-
-func TestExportAgentChatRejectsBlankPath(t *testing.T) {
-	svc := newTestService()
-	if err := svc.ExportAgentChat(" \t\n", "# Agent Chat\n"); err == nil || !strings.Contains(err.Error(), "路径为空") {
-		t.Fatalf("err = %v", err)
-	}
-}
-
-func TestSetLLMConfigClosesChat(t *testing.T) {
-	svc := newTestService()
-	svc.SetLLMConfig(llm.Config{AgentCommand: "gemini"})
-	svc.AgentChatClose()
-	got := svc.LLMConfig()
-	if got.AgentCommand != "gemini" {
-		t.Fatalf("cfg = %+v", got)
-	}
-}
-
-func TestListAgentModelsSkipsUnknownAgent(t *testing.T) {
-	svc := newTestService()
-	got, err := svc.ListAgentModels(t.Context(), llm.Config{AgentCommand: "gemini"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("unknown agent should not probe: %+v", got)
-	}
-}
-
-func TestListAgentModelsCursorMissingBinary(t *testing.T) {
-	svc := newTestService()
-	_, err := svc.ListAgentModels(t.Context(), llm.Config{
-		ActiveID: "cursor",
-		Agents:   []llm.AgentProfile{{ID: "cursor", Name: "Cursor CLI", Command: "definitely-not-a-real-command-upa", Args: []string{"acp"}}},
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestListAgentModelsMissingBinary(t *testing.T) {
-	svc := newTestService()
-	_, err := svc.ListAgentModels(t.Context(), llm.Config{
-		ActiveID: "codex",
-		Agents:   []llm.AgentProfile{{ID: "codex", Name: "Codex", Command: "definitely-not-a-real-command-upa"}},
-	})
-	if err == nil {
-		t.Fatal("expected error")
 	}
 }
 
@@ -266,10 +131,9 @@ func TestStatusEmptySession(t *testing.T) {
 	}
 }
 
-func TestConnectRejectsWiFi(t *testing.T) {
+func TestConnectRejectsInvalidDirectIP(t *testing.T) {
 	svc := newTestService()
-	_, err := svc.Connect("192.168.1.20", 55000)
-	if err == nil || !strings.Contains(err.Error(), "Wi-Fi") {
+	if _, err := svc.Connect("192.168.1.20:55000", 0); err == nil || !strings.Contains(err.Error(), "IP") {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -599,7 +463,7 @@ func TestEOFStartsReconnectWithoutErrorPopup(t *testing.T) {
 
 	svc := newTestService()
 	defer svc.Disconnect()
-	if _, err := svc.connectTCP("127.0.0.1", port, "tcp", true); err != nil {
+	if _, err := svc.Connect("127.0.0.1", port); err != nil {
 		t.Fatal(err)
 	}
 	waitFrames := func(min int, d time.Duration) int {

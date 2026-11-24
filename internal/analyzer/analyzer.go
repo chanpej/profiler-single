@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/protocol"
 )
 
 // Severity 是问题严重程度。

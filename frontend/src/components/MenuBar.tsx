@@ -5,18 +5,16 @@ export type MenuId = 'file' | 'view';
 interface Props {
   onImport: () => void;
   onExport: () => void;
+  onExportUnityData?: () => void;
+  exportingUnityData?: boolean;
   onClear: () => void;
   onFrames: () => void;
   onAnalysis: () => void;
-  onSettings: () => void;
-  onOpenAgentLog?: () => void;
-  onToggleAgent?: () => void;
-  agentCollapsed?: boolean;
 }
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  onImport, onExport, onClear, onFrames, onAnalysis, onSettings, onOpenAgentLog, onToggleAgent, agentCollapsed = false,
+  onImport, onExport, onExportUnityData, exportingUnityData, onClear, onFrames, onAnalysis,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -70,6 +68,11 @@ export function MenuBar({
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onExport)}>
               保存数据 (.upac)
             </button>
+            {onExportUnityData && (
+              <button type="button" className="menubar-cmd" role="menuitem" disabled={exportingUnityData} onClick={() => run(onExportUnityData)}>
+                {exportingUnityData ? '正在导出 Unity .data…' : '导出 Unity .data'}
+              </button>
+            )}
 
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onClear)}>
               清空数据
@@ -94,9 +97,6 @@ export function MenuBar({
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onFrames)}>
               帧数据
             </button>
-            <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(() => onToggleAgent?.())}>
-              {agentCollapsed ? '展开 Agent 面板' : '收起 Agent 面板'}
-            </button>
           </div>
         )}
       </div>
@@ -108,24 +108,6 @@ export function MenuBar({
         onMouseEnter={() => { if (open) setOpen(null); }}
       >
         诊断
-      </button>
-      <button
-        type="button"
-        className="menubar-btn"
-        role="menuitem"
-        onClick={() => run(() => onOpenAgentLog?.())}
-        onMouseEnter={() => { if (open) setOpen(null); }}
-      >
-        Agent Log
-      </button>
-      <button
-        type="button"
-        className="menubar-btn"
-        role="menuitem"
-        onClick={() => run(onSettings)}
-        onMouseEnter={() => { if (open) setOpen(null); }}
-      >
-        设置
       </button>
     </nav>
   );

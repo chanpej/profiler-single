@@ -1,6 +1,6 @@
 // Package procutil 提供外部进程启动的统一封装。
 //
-// UnityPerfAgent 是 Windows 桌面 GUI 程序，直接 exec 拉起 adb、LLM Agent
+// unityperf 是 Windows 桌面 GUI 程序，直接 exec 拉起 adb
 // 等控制台子进程时会弹出黑色控制台窗口。本包在 Windows 上通过
 // CREATE_NO_WINDOW | HideWindow 隐藏控制台，其他平台为空操作。
 package procutil

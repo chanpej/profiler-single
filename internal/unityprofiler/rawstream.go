@@ -8,7 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 // Profiler 原始数据流（MsgIDProfilerData 报文体）结构，实测自 Unity 2022.3 Player：
@@ -39,7 +40,11 @@ const (
 const Unity2022StreamVersion = protocol.Unity2022StreamVersion
 
 // IsSupportedStreamVersion 判断 Profiler 数据流格式是否受支持。
-func IsSupportedStreamVersion(v uint32) bool { return v == Unity2022StreamVersion }
+func IsSupportedStreamVersion(v uint32) bool { return protocol.IsSupportedProfilerVersion(v) }
+
+func IsStreamHeader(body []byte) bool {
+	return len(body) >= streamHeaderSize && binary.LittleEndian.Uint32(body) == streamMagic
+}
 
 // StreamHeader 是 Profiler 数据流首包。
 type StreamHeader struct {
@@ -60,13 +65,17 @@ func ParseStreamHeader(b []byte) (StreamHeader, error) {
 	if got := le.Uint32(b[0:4]); got != streamMagic {
 		return StreamHeader{}, fmt.Errorf("流头魔数无效 %#x", got)
 	}
+	formatVersion := le.Uint32(b[8:12])
+	major, minor, patch := le.Uint32(b[36:40]), le.Uint32(b[40:44]), le.Uint32(b[44:48])
+	releaseType, releaseNumber := le.Uint32(b[48:52]), le.Uint32(b[52:56])
+	engineVersion := formatEngineVersion(major, minor, patch, releaseType, releaseNumber)
+	if formatVersion == protocol.Tuanjie2022StreamVersion && releaseType == 4 {
+		engineVersion = fmt.Sprintf("%d.%d.%dt%d", major, minor, patch, releaseNumber)
+	}
 	return StreamHeader{
-		FormatVersion: le.Uint32(b[8:12]),
+		FormatVersion: formatVersion,
 		MainThreadID:  int64(le.Uint64(b[28:36])),
-		EngineVersion: formatEngineVersion(
-			le.Uint32(b[36:40]), le.Uint32(b[40:44]), le.Uint32(b[44:48]),
-			le.Uint32(b[48:52]), le.Uint32(b[52:56]),
-		),
+		EngineVersion: engineVersion,
 	}, nil
 }
 
@@ -253,7 +262,9 @@ type markerInfo struct {
 	Flags    uint16
 	Category uint16
 	// MetaCount 是该 marker 声明的元数据个数。
-	MetaCount int
+	MetaCount     int
+	categoryField int
+	nameField     int
 }
 
 // IsCounter 判断该 marker 是否为 ProfilerCounter。
@@ -365,10 +376,16 @@ func (m *metaTables) counterKey(id uint32) string {
 
 // threadStream 是一条线程流的重组状态。
 type threadStream struct {
-	buf      []byte
-	nextSeq  int32
-	haveSeq  bool
-	desynced bool
+	id                int64
+	workerFrame       *frameAccum
+	buf               []byte
+	nextSeq           int32
+	haveSeq           bool
+	desynced          bool
+	waitingForFrame   bool
+	lastFrameIndex    uint32
+	lastFrameNS       int64
+	haveFrameBoundary bool
 	// isMain 标识主线程流：只有它决定帧边界、根采样时长与分类自耗时。
 	isMain bool
 	// isMeta 标识元数据流：它失步等于查询表不可用，必须视为整体失败。
@@ -400,12 +417,16 @@ type treeNode struct {
 
 // DecodeStats 是解码过程的可观测指标，便于自检与排障。
 type DecodeStats struct {
-	Chunks         int
-	MetaRecords    int
-	EventRecords   int
-	Frames         int
-	DroppedChunks  int
-	SkippedThreads int
+	Chunks              int
+	MetaRecords         int
+	EventRecords        int
+	Frames              int
+	DroppedChunks       int
+	MissingMainChunks   uint64
+	DiscardedMainChunks int
+	FrameResyncs        int
+	WaitingForFrame     bool
+	SkippedThreads      int
 	// DesyncedThreads 是被放弃的非主线程流条数；它们只贡献计数器，丢掉不影响逐帧指标。
 	DesyncedThreads int
 	Desynced        bool
@@ -432,6 +453,7 @@ type FrameSnapshot struct {
 	Counters map[string]float64
 	// Hierarchy 是主线程 CPU 采样树，Deep Profile 开启后会包含脚本方法。
 	Hierarchy []protocol.SampleNode
+	Timeline  *profileframe.Timeline
 }
 
 // Decoder 把 Profiler 原始数据流解成逐帧数据。
@@ -440,15 +462,17 @@ type FrameSnapshot struct {
 // 因为渲染统计（Draw Calls 等）由渲染线程上报。任一非主线程流失步只会被单独
 // 放弃，不影响逐帧指标。
 type Decoder struct {
-	header   StreamHeader
-	haveHead bool
-	meta     *metaTables
-	streams  map[int64]*threadStream
-	frame    *frameAccum
-	onFrame  SnapshotHandler
-	stats    DecodeStats
-	metaDone bool
-	skipTIDs map[int64]bool
+	header        StreamHeader
+	haveHead      bool
+	meta          *metaTables
+	streams       map[int64]*threadStream
+	frame         *frameAccum
+	onFrame       SnapshotHandler
+	stats         DecodeStats
+	metaDone      bool
+	skipTIDs      map[int64]bool
+	timelines     map[uint32]*profileframe.Timeline
+	timelineOrder []uint32
 }
 
 type frameAccum struct {
@@ -463,11 +487,12 @@ type frameAccum struct {
 // NewDecoder 创建解码器。
 func NewDecoder(onFrame SnapshotHandler) *Decoder {
 	return &Decoder{
-		meta:     newMetaTables(),
-		streams:  make(map[int64]*threadStream),
-		onFrame:  onFrame,
-		skipTIDs: make(map[int64]bool),
-		stats:    DecodeStats{UnknownRecords: make(map[string]int)},
+		meta:      newMetaTables(),
+		streams:   make(map[int64]*threadStream),
+		onFrame:   onFrame,
+		skipTIDs:  make(map[int64]bool),
+		timelines: make(map[uint32]*profileframe.Timeline),
+		stats:     DecodeStats{UnknownRecords: make(map[string]int)},
 	}
 }
 
@@ -515,27 +540,48 @@ func (d *Decoder) Feed(body []byte) error {
 
 	st := d.streams[chunk.ThreadID]
 	if st == nil {
-		st = &threadStream{isMeta: isMeta, isMain: !isMeta && chunk.ThreadID == d.header.MainThreadID}
+		st = &threadStream{id: chunk.ThreadID, isMeta: isMeta, isMain: !isMeta && chunk.ThreadID == d.header.MainThreadID}
 		d.streams[chunk.ThreadID] = st
 	}
 	if st.desynced {
 		return nil
 	}
 	if st.haveSeq && chunk.Seq != st.nextSeq {
-		st.desynced = true
 		d.stats.LastError = fmt.Sprintf("线程 %#x 分块序号断裂：收到 %d，期望 %d", chunk.ThreadID, chunk.Seq, st.nextSeq)
-		if !isMeta && !st.isMain {
-			d.stats.DesyncedThreads++
-			return nil
+		missing := uint32(chunk.Seq) - uint32(st.nextSeq)
+		if st.isMain && d.header.FormatVersion == protocol.Tuanjie2022StreamVersion && missing < 1<<31 {
+			d.stats.MissingMainChunks += uint64(missing)
+			d.waitForTuanjieFrame(st)
+		} else {
+			st.desynced = true
+			if !isMeta && !st.isMain {
+				d.stats.DesyncedThreads++
+				return nil
+			}
+			d.stats.Desynced = true
+			return errors.New(d.stats.LastError)
 		}
-		d.stats.Desynced = true
-		return errors.New(d.stats.LastError)
 	}
 	st.haveSeq = true
 	st.nextSeq = chunk.Seq + 1
+	if st.waitingForFrame {
+		if !st.isTuanjieFrameStart(chunk.Payload) {
+			d.stats.DiscardedMainChunks++
+			return nil
+		}
+		st.waitingForFrame = false
+		d.stats.WaitingForFrame = false
+		d.stats.FrameResyncs++
+	}
 	st.buf = append(st.buf, chunk.Payload...)
 
-	if isMeta {
+	if d.header.FormatVersion == protocol.Tuanjie2022StreamVersion {
+		if isMeta {
+			d.drain(st, d.decodeTuanjieMeta)
+		} else {
+			d.drain(st, d.decodeTuanjieEvent)
+		}
+	} else if isMeta {
 		d.drain(st, d.decodeMetaRecord)
 	} else {
 		d.drain(st, d.decodeEventRecord)
@@ -554,7 +600,7 @@ func (d *Decoder) drain(st *threadStream, decode func(*threadStream, *cursor) er
 				break
 			}
 			st.desynced = true
-			d.stats.LastError = err.Error()
+			d.stats.LastError = fmt.Sprintf("%v（分块 %d，偏移 %d）", err, st.nextSeq-1, start)
 			if st.isMain || st.isMeta {
 				d.stats.Desynced = true
 			} else {
@@ -594,7 +640,7 @@ func (d *Decoder) decodeMetaRecord(_ *threadStream, c *cursor) error {
 		for i := 0; i < info.MetaCount; i++ {
 			c.u8() // dataType
 			c.u8() // unit
-			c.str()
+			info.recordField(i, c.str())
 		}
 		d.meta.markers[id] = info
 	case recMetaCategory:
@@ -652,6 +698,8 @@ func (d *Decoder) decodeEventRecord(st *threadStream, c *cursor) error {
 		// 每条线程流都有帧记录，但只让主线程划定帧边界，否则一帧会被切成多段。
 		if st.isMain {
 			d.rollFrame(index, ts, st)
+		} else {
+			d.rollWorkerFrame(index, ts, st)
 		}
 	case recMetaThread:
 		// 工作线程也会在事件流里再发一遍线程定义（与元数据流同布局）。
@@ -782,7 +830,13 @@ func (d *Decoder) closeSample(st *threadStream, endNS int64) {
 		parent := &st.stack[len(st.stack)-1]
 		parent.kids = append(parent.kids, node)
 	}
-	if d.frame == nil || !st.isMain {
+	if !st.isMain {
+		if st.workerFrame != nil && len(st.stack) == 0 {
+			st.workerFrame.roots = append(st.workerFrame.roots, node)
+		}
+		return
+	}
+	if d.frame == nil {
 		return
 	}
 	if info, ok := d.meta.markers[top.markerID]; ok {
@@ -829,6 +883,10 @@ func (d *Decoder) flushOpenSamples(st *threadStream, frame *frameAccum, endNS in
 	if root.totalNS > frame.rootNS {
 		frame.rootNS = root.totalNS
 	}
+	resetOpenStack(st, endNS)
+}
+
+func resetOpenStack(st *threadStream, endNS int64) {
 	for i := range st.stack {
 		st.stack[i].startNS = endNS
 		st.stack[i].childNS = 0
@@ -871,7 +929,7 @@ func (d *Decoder) snapshotOpenStack(stack []sampleEntry, frame *frameAccum, endN
 		if self < 0 {
 			self = 0
 		}
-		if info, ok := d.meta.markers[e.markerID]; ok {
+		if info, ok := d.meta.markers[e.markerID]; ok && frame.categoryNS != nil {
 			frame.categoryNS[info.Category] += self
 		}
 		kids := make([]*treeNode, len(e.kids), len(e.kids)+1)
@@ -905,6 +963,7 @@ func (a *frameAccum) emit(d *Decoder, endNS int64) {
 		CategoryNS: make(map[string]int64, len(a.categoryNS)),
 		Counters:   make(map[string]float64, len(a.counters)),
 		Hierarchy:  buildHierarchy(d, a.roots, a.startNS),
+		Timeline:   d.timelineFor(a.index),
 	}
 	for cat, ns := range a.categoryNS {
 		snap.CategoryNS[d.meta.categoryName(cat)] += ns

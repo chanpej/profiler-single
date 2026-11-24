@@ -24,21 +24,19 @@ const live: Status = {
 };
 
 describe('StatusBar', () => {
-  it('未连接时显示空闲与 ACP 未配置', () => {
+  it('未连接时显示空闲', () => {
     render(<StatusBar status={disconnected} />);
     expect(screen.getByTestId('statusbar')).toBeInTheDocument();
     expect(screen.getByText('未连接')).toBeInTheDocument();
     expect(screen.getByText('空闲')).toBeInTheDocument();
-    expect(screen.getByText('ACP 未配置')).toBeInTheDocument();
   });
 
-  it('连接采集时显示 USB / 采集中 / Unity 版本 / Agent 名', () => {
-    render(<StatusBar status={live} agentName="Codex" />);
+  it('连接采集时显示 USB / 采集中 / Unity 版本', () => {
+    render(<StatusBar status={live} />);
     expect(screen.getByText('USB 已连接')).toBeInTheDocument();
     expect(screen.getByText('采集中')).toBeInTheDocument();
     expect(screen.getByText('42 帧')).toBeInTheDocument();
     expect(screen.getByText('Unity 2022.3.47f1')).toBeInTheDocument();
-    expect(screen.getByText('Codex')).toBeInTheDocument();
   });
 
   it('重连中显示等待游戏恢复', () => {

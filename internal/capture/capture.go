@@ -10,22 +10,24 @@ import (
 	"math"
 	"os"
 
-	"unityperfagent/internal/profileframe"
-	"unityperfagent/internal/protocol"
+	"unityperf/internal/profileframe"
+	"unityperf/internal/protocol"
 )
 
 const (
-	unity2022DataVersion uint32 = 0x20220328
-	blockHeaderSize             = 28
-	frameEndMarker       uint32 = 0xAFAFAFAF
-	fileEndMarker        uint32 = 0xDEADFEED
-	maxFrameBodyBytes           = 128 << 20
-	maxMarkerDefs               = 100_000
-	maxThreadsPerFrame          = 512
-	maxSamplesPerThread         = 1_000_000
-	maxStringBytes              = 1 << 20
-	maxGCAllocBytes      uint32 = 1 << 30
-	bytesPerKB                  = 1024
+	unity2022DataVersion  uint32 = 0x20220328
+	tuanjieDataVersion           = protocol.Tuanjie2022StreamVersion
+	tuanjieAuxiliaryBytes        = 8
+	blockHeaderSize              = 28
+	frameEndMarker        uint32 = 0xAFAFAFAF
+	fileEndMarker         uint32 = 0xDEADFEED
+	maxFrameBodyBytes            = 128 << 20
+	maxMarkerDefs                = 100_000
+	maxThreadsPerFrame           = 512
+	maxSamplesPerThread          = 1_000_000
+	maxStringBytes               = 1 << 20
+	maxGCAllocBytes       uint32 = 1 << 30
+	bytesPerKB                   = 1024
 )
 
 var (
@@ -203,8 +205,9 @@ func DecodeWithProgress(src io.Reader, total int64, progress Progress) (File, er
 			report()
 			return out, nil
 		}
-		if binary.LittleEndian.Uint32(headerBuf[:4]) != unity2022DataVersion {
-			return File{}, fmt.Errorf("%w：%#x（仅支持 Unity 2022，格式 %#x）", ErrUnsupportedVersion, binary.LittleEndian.Uint32(headerBuf[:4]), unity2022DataVersion)
+		format := binary.LittleEndian.Uint32(headerBuf[:4])
+		if format != unity2022DataVersion && format != tuanjieDataVersion {
+			return File{}, fmt.Errorf("%w：%#x（仅支持 Unity 2022 与团结 2022）", ErrUnsupportedVersion, format)
 		}
 		if _, err := io.ReadFull(br, headerBuf[4:]); err != nil {
 			return File{}, fmt.Errorf("读取 Profiler .data 帧头失败：%w", err)
@@ -227,13 +230,13 @@ func DecodeWithProgress(src io.Reader, total int64, progress Progress) (File, er
 		}
 		if !seen {
 			out.Handshake.UnityVersion = unityVersion(h)
-			out.Handshake.ProfilerStreamVersion = unity2022DataVersion
+			out.Handshake.ProfilerStreamVersion = format
 			seen = true
-		} else if out.Handshake.UnityVersion != unityVersion(h) {
+		} else if out.Handshake.ProfilerStreamVersion != format || out.Handshake.UnityVersion != unityVersion(h) {
 			return File{}, errors.New("Profiler .data 内的 Unity 版本不一致")
 		}
 
-		frame, hierarchy, zeroDuration, err := parseFrameBody(body, markers)
+		frame, hierarchy, zeroDuration, err := parseFrameBody(body, markers, format == tuanjieDataVersion)
 		if err != nil {
 			return File{}, fmt.Errorf("解析第 %d 个 Profiler .data 帧失败：%w", len(out.Frames), err)
 		}
@@ -247,7 +250,7 @@ func DecodeWithProgress(src io.Reader, total int64, progress Progress) (File, er
 	}
 }
 
-func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameData, []protocol.SampleNode, bool, error) {
+func parseFrameBody(body []byte, markers map[uint32]markerInfo, tuanjie bool) (protocol.FrameData, []protocol.SampleNode, bool, error) {
 	r := &reader{b: body[:len(body)-4]}
 	frameID := r.i32()
 	duplicateID := r.i32()
@@ -258,7 +261,7 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	if r.err != nil {
 		return protocol.FrameData{}, nil, false, r.err
 	}
-	if frameID != duplicateID {
+	if !tuanjie && frameID != duplicateID {
 		return protocol.FrameData{}, nil, false, fmt.Errorf("帧编号不一致：%d != %d", frameID, duplicateID)
 	}
 	if cpuUS != 0 && gatheredData == 0 {
@@ -273,6 +276,9 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 	frame := protocol.FrameData{FrameIndex: uint64(frameID), TimestampMs: int64(startNS / 1_000_000), FPS: float32(1_000_000 / float64(cpuUS)), CPUTimeMs: float32(cpuUS) / 1_000, MainThreadMs: float32(cpuUS) / 1_000, GPUTimeMs: float32(gpuUS) / 1_000}
 	if err := readStatsAndAuxiliary(r, &frame); err != nil {
 		return protocol.FrameData{}, nil, false, err
+	}
+	if tuanjie {
+		r.skip(tuanjieAuxiliaryBytes)
 	}
 	// Unity Editor 的 Memory 模块不是从前面的 Legacy MemoryStats 读取的。
 	// 它在 RawFrameDataView 中读取帧尾持久化的 profiler counter table；该表
@@ -300,7 +306,7 @@ func parseFrameBody(body []byte, markers map[uint32]markerInfo) (protocol.FrameD
 		frame.CPUTimeMs, frame.MainThreadMs = hierarchy[0].TotalMs, hierarchy[0].TotalMs
 	}
 	accumulateCPU(&frame, hierarchy)
-	known := frame.CPURenderingMs + frame.CPUScriptsMs + frame.CPUPhysicsMs + frame.CPUAnimationMs + frame.CPUGCMs + frame.CPUVSyncMs + frame.CPUUIMs
+	known := frame.CPURenderingMs + frame.CPUScriptsMs + frame.CPUPhysicsMs + frame.CPUAnimationMs + frame.CPUGCMs + frame.CPUVSyncMs + frame.CPUUIMs + frame.CPULightingMs
 	if other := frame.MainThreadMs - known; other > 0 {
 		frame.CPUOthersMs = other
 	}
@@ -666,6 +672,8 @@ func accumulateCPU(frame *protocol.FrameData, nodes []protocol.SampleNode) {
 			frame.CPUPhysicsMs += n.SelfMs
 		case "Animation":
 			frame.CPUAnimationMs += n.SelfMs
+		case "Lighting":
+			frame.CPULightingMs += n.SelfMs
 		case "GC":
 			frame.CPUGCMs += n.SelfMs
 		case "VSync":
@@ -689,6 +697,32 @@ func categoryName(id uint16) string {
 		return "Physics"
 	case 6:
 		return "Animation"
+	case 2:
+		return "Managed Jobs"
+	case 3:
+		return "Burst Jobs"
+	case 8:
+		return "Audio"
+	case 9:
+		return "Audio Job"
+	case 10:
+		return "Audio Update Job"
+	case 13:
+		return "Lighting"
+	case 16:
+		return "Other"
+	case 20:
+		return "PlayerLoop"
+	case 23:
+		return "Memory"
+	case 24:
+		return "Internal"
+	case 28:
+		return "VFX"
+	case 29:
+		return "Build Interface"
+	case 30:
+		return "Input"
 	case 17:
 		return "GC"
 	case 18:
@@ -708,6 +742,9 @@ func categoryName(id uint16) string {
 
 func unityVersion(h blockHeader) string {
 	release := map[uint32]string{0: "a", 1: "b", 2: "f", 3: "c"}[h.releaseType]
+	if h.formatVersion == tuanjieDataVersion && h.releaseType == 4 {
+		release = "t"
+	}
 	if release == "" {
 		release = "?"
 	}
