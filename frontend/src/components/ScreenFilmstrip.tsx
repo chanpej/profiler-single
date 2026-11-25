@@ -104,6 +104,18 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, start
         </button>
         {open && picked && <button type="button" className="btn ghost" onClick={() => setPreview(!preview)}>{preview ? '关闭预览' : '预览选中帧'}</button>}
         {(error || strip.error) && <small role="alert">{error || strip.error}</small>}
+        <details className="cpu-mouse-guide"><summary>CPU Usage 操作指南</summary>
+          <dl>
+            <dt>滚轮</dt><dd>上下滚动页面</dd>
+            <dt>Ctrl + 滚轮</dt><dd>以鼠标位置缩放时间轴</dd>
+            <dt>按住中键拖动</dt><dd>左右平移时间轴</dd>
+            <dt>左键单击或拖动</dt><dd>选帧或连续查看帧</dd>
+            <dt>Shift + 左键拖动</dt><dd>框选 Left Heavy 帧范围</dd>
+            <dt>拖动 / 双击纵轴</dt><dd>调整上限 / 恢复自动比例</dd>
+            <dt>单击 / 拖动图例</dt><dd>切换分类 / 调整堆叠顺序</dd>
+          </dl>
+        </details>
+
       </div>
       {open && (
         <div className="screen-filmstrip-row">

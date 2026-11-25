@@ -148,23 +148,26 @@ function TimelineDetail({ frame, hierarchy, load, index, refresh, seek, totalFra
     if (!load) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const cached = clicked.current?.index === index && clicked.current.frameIndex === frameIndex ? clicked.current : undefined;
     let remainingRefreshes = refresh ? 4 : 0;
     const fetchThreads = async () => {
       try {
         const rows = await load(index, frameIndex);
         if (active) setLoaded((previous) => {
-          if (previous?.index !== index || previous.frameIndex !== frameIndex || !rows.length) {
-            return { index, frameIndex, rows };
-          }
+          // The new centered page may cover only half of the panned viewport.
+          // Keep both edges in the clicked frame's coordinate system.
+          const base = previous?.index === index && previous.frameIndex === frameIndex ? previous : cached;
+          if (!rows.length) return base ?? { index, frameIndex, rows };
+          if (!base) return { index, frameIndex, rows };
           const first = rows[0].frameIndex;
           const last = rows[rows.length - 1].frameIndex;
           return { index, frameIndex, rows: [
-            ...previous.rows.filter((row) => row.frameIndex < first), ...rows,
-            ...previous.rows.filter((row) => row.frameIndex > last),
+            ...base.rows.filter((row) => row.frameIndex < first), ...rows,
+            ...base.rows.filter((row) => row.frameIndex > last),
           ] };
         });
       } catch {
-        if (active) setLoaded((previous) => previous?.index === index && previous.frameIndex === frameIndex ? previous : { index, frameIndex, rows: [] });
+        if (active) setLoaded((previous) => previous?.index === index && previous.frameIndex === frameIndex ? previous : cached ?? { index, frameIndex, rows: [] });
       } finally {
         if (active && remainingRefreshes > 0) {
           remainingRefreshes--;

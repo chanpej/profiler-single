@@ -360,3 +360,39 @@ it('keeps panned lanes visible while activating a neighbor with a delayed backen
   expect(lanes).toHaveTextContent('Loading Worker');
   expect(viewport).toHaveAttribute('data-start','0');
 });
+
+it('keeps both screen edges fixed across repeated neighbor clicks and centered page reloads', async () => {
+  const { waitFor } = await import('@testing-library/react');
+  const { ProfilerDetail } = await import('./ProfilerDetail');
+  const threads = [{ id: 'main', name: 'Main Thread', offsetMs: 0, samples: tree }];
+  const page = (id: number, radius: number) => Array.from({ length: 2 * radius + 1 }, (_, i) => ({
+    frameIndex: id + i - radius, selected: i === radius, offsetMs: (i - radius) * 10, durationMs: 10, threads,
+  }));
+  const load = vi.fn(async (_: number, id: number) => page(id, id === 20 ? 5 : 2));
+  const seek = vi.fn();
+  const detail = (id: number) => <ProfilerDetail moduleId="cpu" frame={{ ...frame, frameIndex: id }} cpuTab="timeline"
+    totalFrames={60} timelineSelection={id} onTimelineSeek={seek} getTimeline={load} />;
+  const view = render(detail(20));
+  const plot = screen.getByTestId('cpu-timeline-plot');
+  const viewport = screen.getByTestId('cpu-timeline-window');
+  await waitFor(() => expect(viewport).toHaveAttribute('data-span', '10'));
+  mockPlot(plot, THREAD_LABEL_W + 100);
+  const [start, end] = screen.getAllByRole('slider');
+  fireEvent.change(start, { target: { value: '-30' } });
+  fireEvent.change(end, { target: { value: '40' } });
+  const pan = { pointerId: 1, button: 1, clientY: 40 };
+  fireEvent.pointerDown(plot, { ...pan, clientX: 210 });
+  fireEvent.pointerMove(plot, { ...pan, clientX: 200 });
+  fireEvent.pointerUp(plot, { ...pan, clientX: 200 });
+  // Absolute visible interval is frame 20's origin plus [-23, 47] ms.
+  for (const [pixel, id] of [[99, 24], [1, 17], [99, 24]]) {
+    const click = { pointerId: 2, button: 0, clientX: THREAD_LABEL_W + pixel, clientY: 40 };
+    fireEvent.pointerDown(plot, click);
+    fireEvent.pointerUp(plot, click);
+    expect(seek).toHaveBeenLastCalledWith(id);
+    view.rerender(detail(id));
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith(id, id));
+    expect(viewport).toHaveAttribute('data-start', String(-23 - (id - 20) * 10));
+    expect(viewport).toHaveAttribute('data-span', '70');
+  }
+});

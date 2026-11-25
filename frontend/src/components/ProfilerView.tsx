@@ -215,14 +215,14 @@ export function ProfilerView({
     apply(selectInView(windowed, total, local));
   }, [apply, total, windowed]);
 
-  const onWheelChart = useCallback((e: React.WheelEvent<HTMLElement>) => {
+  const onWheelChart = useCallback((e: WheelEvent, wrap: HTMLElement) => {
     if (total === 0) return;
     if (e.cancelable) e.preventDefault();
-    const wrap = e.currentTarget;
+
     const rect = wrap.getBoundingClientRect();
     const local = localIndexFromX(e.clientX - rect.left, rect.width, windowed.visible);
     const anchor = windowed.start + local;
-    if (wheelIntent(e.shiftKey, e.deltaX || 0, e.deltaY) === 'pan') {
+    if (!e.ctrlKey && wheelIntent(e.shiftKey, e.deltaX || 0, e.deltaY) === 'pan') {
       const dx = e.deltaX || 0;
       const delta = dx !== 0
         ? Math.sign(dx) * Math.max(1, Math.round(windowed.visible * 0.1))
@@ -317,7 +317,7 @@ export function ProfilerView({
       <div
         className="profiler-charts"
         data-testid="profiler-charts"
-        title="滚轮缩放，Shift+滚轮平移"
+        title="滚轮上下滚动，Ctrl+滚轮缩放"
       >
         {visibleMods.map((m) => (
           <ProfilerChart
@@ -337,6 +337,9 @@ export function ProfilerView({
               apply(selectInView(windowed, total, range.start));
             } : undefined}
             onActivate={() => setActive(m.id)}
+            pan={m.id === 'cpu' ? { start: windowed.start, visible: windowed.visible,
+              move: (start) => apply(setViewportStart(windowed, total, start)),
+            } : undefined}
             onWheel={onWheelChart}
             yAxisMax={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering' ? yAxisMax[m.id] : undefined}
             onYAxisMaxChange={m.id === 'cpu' || m.id === 'gpu' || m.id === 'rendering'

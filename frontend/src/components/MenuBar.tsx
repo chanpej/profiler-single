@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { ProgressPopup, type UpdateProgress } from './ProgressPopup';
+
 export type MenuId = 'file' | 'view';
 
 interface Props {
@@ -18,8 +20,7 @@ export function MenuBar({
   onImport, onExport, onExportUnityData, saving, onClear, onFrames, onAnalysis, checkUpdate,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [updateMessage, setUpdateMessage] = useState('');
+  const [update, setUpdate] = useState<UpdateProgress>();
   const rootRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -50,7 +51,7 @@ export function MenuBar({
   };
 
   return (
-    <nav className="menubar" ref={rootRef} role="menubar" aria-label="主菜单" data-testid="menubar">
+    <><nav className="menubar" ref={rootRef} role="menubar" aria-label="主菜单" data-testid="menubar">
       <div className="menubar-item">
         <button
           type="button"
@@ -112,13 +113,13 @@ export function MenuBar({
       >
         诊断
       </button>
-      {checkUpdate && <button type="button" role="menuitem" className="menubar-btn" disabled={checking} onClick={async () => {
-        setOpen(null); setChecking(true); setUpdateMessage('');
-        try { setUpdateMessage(await checkUpdate()); }
-        catch (error) { setUpdateMessage(`更新失败：${String(error)}`); }
-        finally { setChecking(false); }
-      }}>{checking ? '正在检查并更新…' : '检查更新'}</button>}
-      {updateMessage && <span role="status">{updateMessage}</span>}
-    </nav>
+      {checkUpdate && <button type="button" role="menuitem" className="menubar-btn" disabled={update?.state === 'checking'} onClick={async () => {
+        setOpen(null); setUpdate({ state: 'checking' });
+        try { setUpdate({ state: 'success', message: await checkUpdate() }); }
+        catch (error) { setUpdate({ state: 'error', message: String(error) }); }
+
+      }}>检查更新</button>}
+
+    </nav>{update && <ProgressPopup progress={null} update={update} onClose={() => setUpdate(undefined)} />}</>
   );
 }

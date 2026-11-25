@@ -74,3 +74,15 @@ describe('MenuBar', () => {
     expect(onAnalysis).toHaveBeenCalledOnce();
   });
 });
+
+it('shows update progress and the result in the save-style modal', async () => {
+  let finish!: (message: string) => void;
+  renderBar({ checkUpdate: () => new Promise(resolve => { finish = resolve; }) });
+  await userEvent.click(screen.getByRole('menuitem', { name: '检查更新' }));
+  expect(screen.getByRole('progressbar', { name: '检查更新进度' })).toBeInTheDocument();
+  finish('当前已是最新版本 v0.2.0');
+  const modal = await screen.findByRole('dialog', { name: '检查更新完成' });
+  expect(modal).toHaveTextContent('当前已是最新版本 v0.2.0');
+  await userEvent.click(screen.getByRole('button', { name: '确定' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+});

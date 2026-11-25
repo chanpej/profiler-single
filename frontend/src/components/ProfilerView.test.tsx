@@ -299,7 +299,7 @@ describe('ProfilerView 时间轴视口', () => {
   it('滚轮向下缩小（可见帧变多）且保持跟随', () => {
     renderView({ frames: many });
     const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
-    fireEvent.wheel(canvas!, { deltaY: 120, clientX: 512 });
+    fireEvent.wheel(canvas!, { ctrlKey: true, deltaY: 120, clientX: 512 });
     expect(Number(viewport().getAttribute('data-visible'))).toBeGreaterThan(300);
     expect(viewport()).toHaveAttribute('data-follow', 'true');
   });
@@ -307,7 +307,7 @@ describe('ProfilerView 时间轴视口', () => {
   it('滚轮向上能从默认的 300 帧继续放大，且保持跟随', () => {
     renderView({ frames: many });
     const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
-    fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
+    fireEvent.wheel(canvas!, { ctrlKey: true, deltaY: -120, clientX: 512 });
     expect(viewport()).toHaveAttribute('data-visible', '240');
     expect(viewport()).toHaveAttribute('data-start', '160');
     expect(viewport()).toHaveAttribute('data-follow', 'true');
@@ -321,7 +321,7 @@ describe('ProfilerView 时间轴视口', () => {
     rerender(<ProfilerView {...props} totalCount={320} />);
     expect(viewport()).toHaveAttribute('data-visible', '300');
     const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
-    fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
+    fireEvent.wheel(canvas!, { ctrlKey: true, deltaY: -120, clientX: 512 });
     rerender(<ProfilerView {...props} totalCount={400} />);
     expect(viewport()).toHaveAttribute('data-visible', '240');
     expect(viewport()).toHaveAttribute('data-start', '160');
@@ -438,4 +438,41 @@ describe('ProfilerView 时间轴视口', () => {
     await userEvent.click(screen.getByLabelText('Deep Profile'));
     expect(onDeepProfiling).toHaveBeenCalledWith(true);
   });
+});
+
+it('only captures Ctrl+wheel to zoom the CPU chart', () => {
+  renderView({ frames: Array.from({ length: 400 }, (_, i) => frameAt(i)) });
+  const plot = screen.getByTestId('profiler-chart-cpu').querySelector('canvas')!;
+  expect(fireEvent.wheel(plot, { deltaY: -120, cancelable: true })).toBe(true);
+  expect(screen.getByTestId('profiler-viewport')).toHaveAttribute('data-visible', '300');
+  expect(fireEvent.wheel(plot, { ctrlKey: true, deltaY: -120, cancelable: true })).toBe(false);
+  expect(screen.getByTestId('profiler-viewport')).toHaveAttribute('data-visible', '240');
+});
+
+it('pans CPU frames with the middle button and stops on release', () => {
+  renderView({ frames: Array.from({ length: 400 }, (_, i) => frameAt(i)) });
+  const plot = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas')!;
+  vi.spyOn(plot, 'getBoundingClientRect').mockReturnValue({ width: 300 } as DOMRect);
+  const viewport = screen.getByTestId('profiler-viewport');
+  const selected = viewport.getAttribute('data-selected');
+  const mouse = { pointerId: 3, button: 1 };
+  fireEvent.pointerDown(plot, { ...mouse, clientX: 100 });
+  fireEvent.pointerMove(plot, { ...mouse, clientX: 145 });
+  expect(viewport).toHaveAttribute('data-start', '55');
+  fireEvent.pointerMove(plot, { ...mouse, clientX: 125 });
+  expect(viewport).toHaveAttribute('data-start', '75');
+  fireEvent.pointerUp(plot, { ...mouse, clientX: 125 });
+  fireEvent.pointerMove(plot, { ...mouse, clientX: 200 });
+  expect(viewport).toHaveAttribute('data-start', '75');
+  expect(viewport.getAttribute('data-selected')).toBe(selected);
+});
+
+it('keeps the shared CPU time scale when scrolling across chart boundaries without Ctrl', () => {
+  renderView({ frames: Array.from({ length: 400 }, (_, i) => frameAt(i)) });
+  const viewport = screen.getByTestId('profiler-viewport');
+  for (const module of ['cpu','gpu','rendering','memory','rendering','gpu','cpu']) {
+    const plot = screen.getByTestId(`profiler-chart-${module}`).querySelector('canvas')!;
+    expect(fireEvent.wheel(plot, { deltaY: 120, cancelable: true })).toBe(true);
+    expect(viewport).toHaveAttribute('data-visible','300');
+  }
 });

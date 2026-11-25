@@ -1378,3 +1378,8 @@ code {
 .connection-modes { display:inline-flex; flex-shrink:0; border:1px solid var(--border); border-radius:4px; overflow:hidden; }
 .connection-modes button { background:transparent; color:var(--text-dim); border:0; padding:4px 9px; cursor:pointer; }
 .connection-modes button[aria-pressed=true] { background:var(--bg-panel); color:var(--text); box-shadow:inset 0 -2px #47a6dc; }
+
+.cpu-mouse-guide { position: relative; margin-left: auto; flex-shrink: 0; font-size: 12px; }
+.cpu-mouse-guide summary { cursor: pointer; color: var(--text-dim); }
+.cpu-mouse-guide dl { position: absolute; right: 0; top: 100%; z-index: 20; display: grid; grid-template-columns: max-content max-content; gap: 6px 12px; padding: 12px; margin: 4px 0 0; background: var(--bg-panel); border: 1px solid var(--border); }
+.cpu-mouse-guide dd { margin: 0; }

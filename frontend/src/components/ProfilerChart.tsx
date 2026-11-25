@@ -11,11 +11,12 @@ interface Props {
   active: boolean;
   height?: number;
   onSelectFrame: (index: number) => void;
+  pan?: { start: number; visible: number; move: (start: number) => void };
   frameRange?: FrameRange;
   onSelectRange?: (range: FrameRange) => void;
   onActivate: () => void;
   /** 仅激活模块的左侧信息区显示此入口。 */
-  onWheel?: (e: React.WheelEvent<HTMLElement>) => void;
+  onWheel?: (e: WheelEvent, plot: HTMLElement) => void;
   /** 可调纵轴的手动上限。 */
   yAxisMax?: number;
   onYAxisMaxChange?: (max: number | undefined) => void;
@@ -58,11 +59,12 @@ function memoryMetricForSeries(id: string): MemoryMetricId | null {
  * 点击或拖拽图表选帧，点击整行激活该模块的详情面板。
  */
 export function ProfilerChart({
-  module, frames, selectedIndex, active, height, onSelectFrame, frameRange, onSelectRange, onActivate, onWheel,
+  module, frames, selectedIndex, active, height, onSelectFrame, pan, frameRange, onSelectRange, onActivate, onWheel,
   yAxisMax, onYAxisMaxChange, layoutRevision, fillAvailableHeight = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const middleDrag = useRef<{ id: number; x: number; start: number; framesPerPixel: number } | null>(null);
   const dragging = useRef(false);
   const [rangeDraft, setRangeDraft] = useState<{ anchor: number; end: number } | null>(null);
   const rangeStart = rangeDraft ? Math.min(rangeDraft.anchor, rangeDraft.end) : frameRange?.start;
@@ -75,6 +77,18 @@ export function ProfilerChart({
   const selectedFrame = frames[selectedIndex];
   const isMemory = module.id === 'memory';
   const isCpu = module.id === 'cpu';
+  useEffect(() => {
+    const plot = wrapRef.current;
+    if (!plot || !onWheel) return;
+    const wheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !(e.shiftKey && !isCpu)) return;
+      if (!isCpu && e.target instanceof Element && e.target.closest('.profiler-y-axis-control')) return;
+      if (e.cancelable) e.preventDefault();
+      onWheel(e, plot);
+    };
+    plot.addEventListener('wheel', wheel, { passive: false });
+    return () => plot.removeEventListener('wheel', wheel);
+  }, [isCpu, onWheel]);
   const legendSeries = useMemo(() => isCpu
     ? [...series].sort((first, second) => seriesOrder.indexOf(first.id) - seriesOrder.indexOf(second.id))
     : series, [isCpu, series, seriesOrder]);
@@ -407,9 +421,24 @@ export function ProfilerChart({
         ref={wrapRef}
         className="profiler-chart-canvas"
         data-frame-range={rangeStart !== undefined && rangeEnd !== undefined ? `${rangeStart}:${rangeEnd}` : undefined}
-        title={isCpu ? 'Shift+拖动框选 Left Heavy 帧范围 · 滚轮上下滚动' : '滚轮缩放，Shift+滚轮平移'}
-        onWheel={isCpu ? undefined : onWheel}
+        title={isCpu ? '滚轮上下滚动 · Ctrl+滚轮缩放时间轴 · Shift+拖动框选 Left Heavy 帧范围' : 'Ctrl+滚轮缩放，Shift+滚轮平移'}
+
+        onLostPointerCapture={(e) => {
+          if (middleDrag.current?.id === e.pointerId) {
+            middleDrag.current = null;
+            e.currentTarget.style.cursor = '';
+          }
+        }}
         onPointerDown={(e) => {
+          if (e.button === 1 && pan) {
+            e.preventDefault();
+            const width = e.currentTarget.getBoundingClientRect().width;
+            if (!width || !frames.length) return;
+            middleDrag.current = { id: e.pointerId, x: e.clientX, start: pan.start, framesPerPixel: pan.visible / width };
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            e.currentTarget.style.cursor = 'grabbing';
+            return;
+          }
           if (e.button !== 0) return;
           const index = pick(e.clientX);
           if (index === null) return;
@@ -424,19 +453,32 @@ export function ProfilerChart({
           }
         }}
         onPointerMove={(e) => {
+          const drag = middleDrag.current;
+          if (drag && drag.id === e.pointerId) {
+            const delta = Math.round((drag.x - e.clientX) * drag.framesPerPixel);
+            pan?.move(drag.start + delta);
+            return;
+          }
           const index = pick(e.clientX);
           if (index === null) return;
           if (rangeDraft) setRangeDraft({ ...rangeDraft, end: index });
           else if (dragging.current) onSelectFrame(index);
         }}
         onPointerUp={(e) => {
+          if (middleDrag.current?.id === e.pointerId) {
+            middleDrag.current = null;
+            e.currentTarget.style.cursor = '';
+            return;
+          }
           dragging.current = false;
           if (!rangeDraft) return;
           const end = pick(e.clientX) ?? rangeDraft.end;
           onSelectRange?.({ start: Math.min(rangeDraft.anchor, end), end: Math.max(rangeDraft.anchor, end) });
           setRangeDraft(null);
         }}
-        onPointerCancel={() => {
+        onPointerCancel={(e) => {
+          middleDrag.current = null;
+          e.currentTarget.style.cursor = '';
           dragging.current = false;
           setRangeDraft(null);
         }}
@@ -464,6 +506,7 @@ export function ProfilerChart({
               resetYAxis();
             }}
             onPointerDown={(e) => {
+              if (e.button !== 0) return;
               e.preventDefault();
               e.stopPropagation();
               axisDrag.current = { lastY: e.clientY };
@@ -479,7 +522,7 @@ export function ProfilerChart({
               axisDrag.current = null;
               try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* capture may already be released */ }
             }}
-            onPointerCancel={() => { axisDrag.current = null; }}
+            onPointerCancel={(e) => { axisDrag.current = null; }}
             onKeyDown={(e) => {
               if (e.key === 'ArrowUp') {
                 e.preventDefault();
