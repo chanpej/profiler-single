@@ -167,7 +167,7 @@ func (p *PerfService) ServiceStartup(ctx context.Context, options application.Se
 	p.emit = func(name string, data any) { app.Event.Emit(name, data) }
 	p.mu.Unlock()
 	p.openLog()
-	p.startDefaultAutoconnect(defaultAutoconnectPort)
+
 	return nil
 }
 
@@ -696,6 +696,22 @@ func timelineFrameDuration(frame profileframe.Frame) float64 {
 		return float64(frame.PlayerEndNS-frame.PlayerStartNS) / 1e6
 	}
 	return float64(max(frame.Summary.CPUTimeMs, frame.Summary.MainThreadMs))
+}
+
+// RevealExport selects the saved capture in the system file manager.
+func (p *PerfService) RevealExport(path string) error {
+	fullPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return fmt.Errorf("无法定位导出文件：%w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("导出路径不是文件")
+	}
+	return revealFile(fullPath)
 }
 
 // ExportCapture stores the current PD3U stream as a native .upac archive.

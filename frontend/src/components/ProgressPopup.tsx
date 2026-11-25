@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { clampPercent, fileBaseName, importProgressLabel } from '../lib/importProgress';
 import type { ImportProgressEvent } from '../types';
@@ -10,10 +11,12 @@ export interface SaveProgress {
 interface Props {
   progress: ImportProgressEvent | null;
   save?: SaveProgress | null;
+  onReveal?: (path: string) => Promise<void>;
   onClose?: () => void;
 }
 
-export function ProgressPopup({ progress, save, onClose }: Props) {
+export function ProgressPopup({ progress, save, onClose, onReveal }: Props) {
+  const [revealError, setRevealError] = useState('');
   if (!progress && !save) return null;
   const percent = save ? save.percent : clampPercent(progress?.percent ?? 0);
   const complete = save?.percent === 100;
@@ -39,7 +42,14 @@ export function ProgressPopup({ progress, save, onClose }: Props) {
           {complete ? (
             <>
               <p className="progress-popup-path" role="status">{save?.path}</p>
-              <button type="button" className="btn primary" onClick={onClose} autoFocus>确定</button>
+              <div className="progress-popup-actions">
+                {onReveal && <button type="button" className="btn" onClick={async () => {
+                  setRevealError('');
+                  try { await onReveal(save.path); } catch (error) { setRevealError(String(error)); }
+                }}>打开文件夹</button>}
+                <button type="button" className="btn primary" onClick={onClose} autoFocus>确定</button>
+              </div>
+              {revealError && <p role="alert">{revealError}</p>}
             </>
           ) : (
             <>

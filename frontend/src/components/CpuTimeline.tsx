@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CpuThreadSamples, CpuTimelineFrame, FrameData, FrameRange, SampleNode } from '../types';
 import { formatMs } from '../lib/format';
 import {
@@ -149,7 +149,7 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
     }
   }, [layout.totalMs, layout.startMs, context, canPageLeft, canPageRight, onExtend]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = previousLayout.current;
     previousLayout.current = { frameIndex: frame.frameIndex, fit };
     if (previous.frameIndex !== frame.frameIndex) {
@@ -334,7 +334,7 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
     }
   }, [context, visibleThreads, selected, labelStyle]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     draw();
   }, [draw, win]);
 

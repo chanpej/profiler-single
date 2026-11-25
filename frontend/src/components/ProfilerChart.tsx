@@ -407,8 +407,8 @@ export function ProfilerChart({
         ref={wrapRef}
         className="profiler-chart-canvas"
         data-frame-range={rangeStart !== undefined && rangeEnd !== undefined ? `${rangeStart}:${rangeEnd}` : undefined}
-        title={isCpu ? 'Shift+拖动框选 Left Heavy 帧范围 · 滚轮缩放时间轴' : '滚轮缩放，Shift+滚轮平移'}
-        onWheel={onWheel}
+        title={isCpu ? 'Shift+拖动框选 Left Heavy 帧范围 · 滚轮上下滚动' : '滚轮缩放，Shift+滚轮平移'}
+        onWheel={isCpu ? undefined : onWheel}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           const index = pick(e.clientX);
@@ -452,8 +452,8 @@ export function ProfilerChart({
             aria-valuemax={60000}
             aria-valuenow={Math.round(maxY * 100) / 100}
             aria-valuetext={`${maxY.toFixed(2)}ms`}
-            title={isCpu ? '拖动或滚动调整上限，双击恢复自动比例' : '拖动或滚动调整上限，双击恢复 100ms'}
-            onWheel={(e) => {
+            title={isCpu ? '拖动调整上限，双击恢复自动比例' : '拖动或滚动调整上限，双击恢复 100ms'}
+            onWheel={isCpu ? undefined : (e) => {
               e.preventDefault();
               e.stopPropagation();
               adjustYAxis(e.deltaY);

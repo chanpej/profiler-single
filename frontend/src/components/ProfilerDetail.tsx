@@ -139,7 +139,9 @@ function TimelineDetail({ frame, hierarchy, load, index, refresh, seek, totalFra
 }) {
   const [loaded, setLoaded] = useState<{ index: number; frameIndex: number; rows: CpuTimelineFrame[] }>();
   const frameIndex = frame.frameIndex;
-  const context = loaded?.index === index && loaded.frameIndex === frameIndex ? loaded.rows : undefined;
+  const clicked = useRef<typeof loaded>(undefined);
+  const context = loaded?.index === index && loaded.frameIndex === frameIndex ? loaded.rows
+    : clicked.current?.index === index && clicked.current.frameIndex === frameIndex ? clicked.current.rows : undefined;
   const generation = useRef(0);
   const inFlight = useRef(new Set<string>());
   useEffect(() => {
@@ -206,7 +208,13 @@ function TimelineDetail({ frame, hierarchy, load, index, refresh, seek, totalFra
   const selectNeighbor = seek && context ? (neighbor: CpuTimelineFrame) => {
     const center = context.findIndex((candidate) => candidate.selected);
     const position = context.indexOf(neighbor);
-    if (center >= 0 && position >= 0) seek(index + position - center);
+    if (center < 0 || position < 0) return;
+    const nextIndex = index + position - center;
+    // Keep already-visible lanes while the backend loads the new frame's neighborhood.
+    clicked.current = { index: nextIndex, frameIndex: neighbor.frameIndex, rows: context.map((row) => ({
+      ...row, selected: row === neighbor, offsetMs: row.offsetMs - neighbor.offsetMs,
+    })) };
+    seek(nextIndex);
   } : undefined;
   return <CpuTimeline frame={frame} hierarchy={load ? [] : hierarchy} context={context}
     selectionIndex={index} onVisibleRange={onVisibleRange}

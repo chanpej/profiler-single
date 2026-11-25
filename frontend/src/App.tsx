@@ -43,7 +43,11 @@ const overlayTitle: Record<OverlayId, string> = {
 
 const windowControls = createWindowControls(Window as unknown as import('./lib/window').WindowAPI);
 
+import { loadMode, writeSetting, type ConnectionMode } from './lib/connectionPreferences';
+
 function App() {
+  const [mode, setMode] = useState(loadMode);
+  const started = useRef(false);
   const [overlay, setOverlay] = useState<OverlayId | null>(null);
   const [status, setStatus] = useState<Status>(emptyStatus);
   const [, setStats] = useState<Stats | null>(null);
@@ -92,7 +96,7 @@ function App() {
       if (importing.current) setImportProgress(ev);
     });
     const offExport = api.onExportProgress(({ path, percent }) => {
-      setSaveProgress((current) => current?.path === path && current.percent !== null && percent > current.percent
+      setSaveProgress((current) => current?.path === path && current.percent !== null && percent < 100 && percent > current.percent
         ? { ...current, percent } : current);
     });
     return () => {
@@ -141,6 +145,30 @@ function App() {
       setBusy(false);
     }
   }, [refresh]);
+
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    void guard(async () => {
+      const current = await api.status();
+      if (current.connected || current.reconnecting) {
+        const activeMode = current.transport === 'autoconnect' ? 'mini' : 'app';
+        setMode(activeMode);
+        writeSetting('mode', activeMode);
+      } else if (loadMode() === 'mini') {
+        await api.startAutoconnect(37100);
+      }
+    });
+  }, [guard]);
+
+  const changeMode = (next: ConnectionMode) => {
+    if (next === mode || busy) return;
+    void guard(async () => {
+      await api.disconnect();
+      setMode(next);
+      writeSetting('mode', next);
+    });
+  };
 
   const onPackageIdChange = useCallback((value: string) => {
     setPackageId(value);
@@ -205,7 +233,7 @@ function App() {
   return (
     <div className="app">
       <TitleBar controls={windowControls} />
-      <MenuBar
+      <MenuBar checkUpdate={api.checkUpdate}
         onImport={onImport}
         onExport={() => saveRecording(false)}
         onExportUnityData={() => saveRecording(true)}
@@ -216,7 +244,7 @@ function App() {
       />
       <div className="app-body">
         <div className="app-main">
-          <ConnectBar phones={phones}
+          <ConnectBar phones={phones} mode={mode} onModeChange={changeMode}
             status={status}
             busy={busy}
             packageId={packageId}
@@ -256,7 +284,7 @@ function App() {
       <StatusBar status={status} busy={busy} />
 
       <ErrorPopup message={error} open={error !== ''} onClose={() => setError('')} />
-      <ProgressPopup progress={importProgress} save={saveProgress} onClose={() => setSaveProgress(null)} />
+      <ProgressPopup key={saveProgress?.path} onReveal={api.revealExport} progress={importProgress} save={saveProgress} onClose={() => setSaveProgress(null)} />
 
       <AppDialog
         title={overlay ? overlayTitle[overlay] : ''}

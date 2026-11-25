@@ -10,13 +10,16 @@ interface Props {
   onClear: () => void;
   onFrames: () => void;
   onAnalysis: () => void;
+  checkUpdate?: () => Promise<string>;
 }
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  onImport, onExport, onExportUnityData, saving, onClear, onFrames, onAnalysis,
+  onImport, onExport, onExportUnityData, saving, onClear, onFrames, onAnalysis, checkUpdate,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState('');
   const rootRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -109,6 +112,13 @@ export function MenuBar({
       >
         诊断
       </button>
+      {checkUpdate && <button type="button" role="menuitem" className="menubar-btn" disabled={checking} onClick={async () => {
+        setOpen(null); setChecking(true); setUpdateMessage('');
+        try { setUpdateMessage(await checkUpdate()); }
+        catch (error) { setUpdateMessage(`更新失败：${String(error)}`); }
+        finally { setChecking(false); }
+      }}>{checking ? '正在检查并更新…' : '检查更新'}</button>}
+      {updateMessage && <span role="status">{updateMessage}</span>}
     </nav>
   );
 }

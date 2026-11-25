@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"maps"
+	"net/netip"
 	"slices"
 	"strconv"
 	"time"
@@ -68,11 +69,11 @@ func (p *PerfService) setScreenCapture(enabled bool, endpoint string) error {
 	p.screen.cancel = cancel
 	p.screen.lastError = ""
 	p.screen.runID++
-	go p.captureScreen(ctx, p.screen.runID, p.adbRun, p.usbSerial, endpoint)
+	go p.captureScreen(ctx, p.screen.runID, p.adbRun, p.usbSerial, endpoint, p.liveHost)
 	return nil
 }
 
-func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbforward.Runner, serial, endpoint string) {
+func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbforward.Runner, serial, endpoint, playerHost string) {
 	if endpoint != "" {
 		if err := connectScreenDevice(ctx, run, endpoint); err != nil {
 			p.screenCaptureError(runID, err)
@@ -80,16 +81,12 @@ func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbfo
 		}
 		serial = endpoint
 	} else if serial == "" {
-		devices, err := adbforward.ListDevices(run)
+		selected, err := selectScreenDevice(ctx, run, playerHost)
 		if err != nil {
 			p.screenCaptureError(runID, err)
 			return
 		}
-		if len(devices) != 1 {
-			p.screenCaptureError(runID, errors.New("自动选择截图设备需要一台在线 ADB 手机；也可在无线截图中指定地址"))
-			return
-		}
-		serial = devices[0].Serial
+		serial = selected
 	}
 	ticker := time.NewTicker(1500 * time.Millisecond)
 	defer ticker.Stop()
@@ -133,6 +130,43 @@ func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbfo
 	}
 }
 
+func selectScreenDevice(ctx context.Context, run adbforward.Runner, playerHost string) (string, error) {
+	devices, err := adbforward.ListDevices(run)
+	if err != nil {
+		return "", err
+	}
+	if len(devices) == 1 {
+		return devices[0].Serial, nil
+	}
+	if len(devices) == 0 {
+		return "", errors.New("没有在线 ADB 设备，请连接手机后重试")
+	}
+	host, err := netip.ParseAddr(playerHost)
+	if err == nil && host.IsGlobalUnicast() {
+		for _, d := range devices {
+			if endpoint, err := netip.ParseAddrPort(d.Serial); err == nil && endpoint.Addr().Unmap() == host.Unmap() {
+				return d.Serial, nil
+			}
+		}
+		var matched string
+		for _, d := range devices {
+			probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+			out, err := run(probe, "-s", d.Serial, "shell", phoneProbe)
+			cancel()
+			if err == nil && readPhone(d, out).IP == host.String() {
+				if matched != "" {
+					matched = ""
+					break
+				}
+				matched = d.Serial
+			}
+		}
+		if matched != "" {
+			return matched, nil
+		}
+	}
+	return "", errors.New("有多个在线 ADB 连接，无法确定当前 Player 的手机，请在无线截图中指定地址")
+}
 func (p *PerfService) screenCaptureError(runID uint64, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

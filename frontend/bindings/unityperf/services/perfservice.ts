@@ -35,6 +35,10 @@ export function AutoconnectAddresses(): $CancellablePromise<string[] | null> {
     return $Call.ByID(2589181433);
 }
 
+export function CheckForUpdate(): $CancellablePromise<string> {
+    return $Call.ByID(962810706);
+}
+
 export function Clear(): $CancellablePromise<void> {
     return $Call.ByID(1415434857);
 }
@@ -136,6 +140,13 @@ export function Latest(n: number): $CancellablePromise<protocol$0.FrameData[] | 
 
 export function PlayerLogs(after: number): $CancellablePromise<$models.PlayerLog[] | null> {
     return $Call.ByID(993932978, after);
+}
+
+/**
+ * RevealExport selects the saved capture in the system file manager.
+ */
+export function RevealExport(path: string): $CancellablePromise<void> {
+    return $Call.ByID(3393318063, path);
 }
 
 export function ScreenFilmstrip(offset: number, count: number, selected: number): $CancellablePromise<$models.ScreenFilmstrip> {

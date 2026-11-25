@@ -298,7 +298,7 @@ describe('ProfilerView 时间轴视口', () => {
 
   it('滚轮向下缩小（可见帧变多）且保持跟随', () => {
     renderView({ frames: many });
-    const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
     fireEvent.wheel(canvas!, { deltaY: 120, clientX: 512 });
     expect(Number(viewport().getAttribute('data-visible'))).toBeGreaterThan(300);
     expect(viewport()).toHaveAttribute('data-follow', 'true');
@@ -306,7 +306,7 @@ describe('ProfilerView 时间轴视口', () => {
 
   it('滚轮向上能从默认的 300 帧继续放大，且保持跟随', () => {
     renderView({ frames: many });
-    const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
     fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
     expect(viewport()).toHaveAttribute('data-visible', '240');
     expect(viewport()).toHaveAttribute('data-start', '160');
@@ -320,7 +320,7 @@ describe('ProfilerView 时间轴视口', () => {
     await waitFor(() => expect(fetchRange).toHaveBeenLastCalledWith(0, 10));
     rerender(<ProfilerView {...props} totalCount={320} />);
     expect(viewport()).toHaveAttribute('data-visible', '300');
-    const canvas = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    const canvas = screen.getByTestId('profiler-chart-gpu').querySelector('.profiler-chart-canvas');
     fireEvent.wheel(canvas!, { deltaY: -120, clientX: 512 });
     rerender(<ProfilerView {...props} totalCount={400} />);
     expect(viewport()).toHaveAttribute('data-visible', '240');
@@ -344,7 +344,16 @@ describe('ProfilerView 时间轴视口', () => {
     expect(chart).toHaveAttribute('data-overflow-count', '0');
     expect(axis).toHaveAttribute('aria-valuemin', '0.01');
 
-    fireEvent.wheel(axis, { deltaY: -100 });
+    for (const target of [axis, chart.querySelector('.profiler-chart-canvas')!]) {
+      for (const deltaY of [-120, 120]) {
+        expect(fireEvent.wheel(target, { deltaY, cancelable: true })).toBe(true);
+        expect(Number(chart.getAttribute('data-y-max'))).toBe(defaultMax);
+      }
+    }
+    Object.defineProperty(axis, 'setPointerCapture', { value: vi.fn() });
+    fireEvent.pointerDown(axis, { pointerId: 1, clientY: 100 });
+    fireEvent.pointerMove(axis, { pointerId: 1, clientY: 0 });
+    fireEvent.pointerUp(axis, { pointerId: 1 });
     const manualMax = Number(chart.getAttribute('data-y-max'));
     expect(manualMax).toBeLessThan(defaultMax);
     expect(chart).toHaveAttribute('data-overflow-count', '1');

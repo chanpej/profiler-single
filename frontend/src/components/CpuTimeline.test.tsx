@@ -323,3 +323,40 @@ describe('CpuTimeline', () => {
     expect(plot).not.toHaveClass('is-panning');
   });
 });
+
+it('keeps panned lanes visible while activating a neighbor with a delayed backend response', async () => {
+  const { waitFor, act } = await import('@testing-library/react');
+  const { ProfilerDetail } = await import('./ProfilerDetail');
+  const threads = [{ id: 'worker', name: 'Loading Worker', offsetMs: 0, samples: tree }];
+  const rows = (center: number) => [20, 21, 22].map(id => ({ frameIndex: id, selected: id === center,
+    offsetMs: (id - center) * 10, durationMs: 10, threads }));
+  let finish!: () => void;
+  const load = async (_: number, id: number) => {
+    if (id === 21) await new Promise<void>(resolve => { finish = resolve; });
+    return rows(id);
+  };
+  const seek = vi.fn();
+  const detail = (id: number) => <ProfilerDetail moduleId="cpu" frame={{ ...frame, frameIndex: id }} cpuTab="timeline"
+    totalFrames={23} timelineSelection={id} onTimelineSeek={seek} getTimeline={load} />;
+  const view = render(detail(20));
+  const lanes = screen.getByTestId('cpu-timeline-threads');
+  await waitFor(() => expect(lanes).toHaveTextContent('Loading Worker'));
+  const plot = screen.getByTestId('cpu-timeline-plot');
+  mockPlot(plot, THREAD_LABEL_W + 100);
+  const pan = { pointerId: 1, button: 1, clientY: 40 };
+  fireEvent.pointerDown(plot, { ...pan, clientX: 230 });
+  fireEvent.pointerMove(plot, { ...pan, clientX: 130 });
+  fireEvent.pointerUp(plot, { ...pan, clientX: 130 });
+  const click = { pointerId: 2, button: 0, clientX: THREAD_LABEL_W + 30, clientY: 40 };
+  fireEvent.pointerDown(plot, click);
+  fireEvent.pointerUp(plot, click);
+  expect(seek).toHaveBeenCalledWith(21);
+  view.rerender(detail(21));
+  expect(lanes).toHaveTextContent('Loading Worker');
+  const viewport = screen.getByTestId('cpu-timeline-window');
+  expect(viewport).toHaveAttribute('data-start','0');
+  expect(viewport).toHaveAttribute('data-span','10');
+  await act(async () => finish());
+  expect(lanes).toHaveTextContent('Loading Worker');
+  expect(viewport).toHaveAttribute('data-start','0');
+});

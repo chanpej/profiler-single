@@ -1,7 +1,7 @@
 // NOTE: this file intentionally uses \uXXXX escapes for CJK strings to stay
 // ASCII-only (the file was repeatedly corrupted by editor encoding issues).
 import type { ComponentProps } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConnectBar } from './ConnectBar';
@@ -53,10 +53,12 @@ const usbConnected: Status = {
 };
 
 const noop = () => {};
+beforeEach(() => localStorage.clear());
 
 function renderBar(override: Partial<ComponentProps<typeof ConnectBar>> = {}) {
   const props: ComponentProps<typeof ConnectBar> = {
     status: disconnected,
+    mode: 'app', onModeChange: noop,
     busy: false,
     packageId: '',
     onPackageIdChange: noop,
@@ -69,9 +71,9 @@ function renderBar(override: Partial<ComponentProps<typeof ConnectBar>> = {}) {
 }
 
 describe('ConnectBar', () => {
-  it('connects by phone IP from the default Mini Game waiting state', async () => {
+  it('connects by phone IP in App mode', async () => {
     const onDirect = vi.fn();
-    renderBar({ status: { ...disconnected, transport: 'autoconnect', reconnecting: true }, onDirect });
+    renderBar({ onDirect });
     const button = screen.getByRole('button', { name: 'IP 直连' });
     expect(button).toBeDisabled();
     await userEvent.type(screen.getByLabelText('手机 IP'), ' 192.168.0.42 ');
@@ -112,7 +114,7 @@ describe('ConnectBar', () => {
 
   it('starts Mini Game autoconnect without an Android package ID', async () => {
     const onAutoconnect = vi.fn();
-    renderBar({ onAutoconnect, autoconnectAddresses: ['192.168.0.42', '10.0.0.8'] });
+    renderBar({ mode: 'mini', onAutoconnect, autoconnectAddresses: ['192.168.0.42', '10.0.0.8'] });
     const button = screen.getByRole('button', { name: '开启小游戏监听' });
     expect(button).toHaveClass('minigame-listener-button');
     expect(button.nextElementSibling).toHaveTextContent('本机 IP 192.168.0.42 / 10.0.0.8');
@@ -123,7 +125,7 @@ describe('ConnectBar', () => {
   it.each([false, true])('offers a close button while the Mini Game port is listening (connected: %s)', async (isConnected) => {
     const onDisconnect = vi.fn();
     renderBar({
-      status: { ...connected, connected: isConnected, reconnecting: !isConnected, transport: 'autoconnect' },
+      mode: 'mini', status: { ...connected, connected: isConnected, reconnecting: !isConnected, transport: 'autoconnect' },
       onDisconnect,
     });
     const button = screen.getByRole('button', { name: '关闭小游戏监听' });
@@ -134,13 +136,13 @@ describe('ConnectBar', () => {
 
   it('keeps the address visible while waiting for the Mini Game', () => {
     renderBar({
-      status: { ...usbConnected, connected: false, reconnecting: true, transport: 'autoconnect' },
+      mode: 'mini', status: { ...usbConnected, connected: false, reconnecting: true, transport: 'autoconnect' },
       autoconnectAddresses: ['192.168.0.42'],
       packageId: 'com.company.game',
     });
     expect(screen.getByText(/等待小游戏连接/)).toBeInTheDocument();
     expect(screen.getByText('192.168.0.42')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: BTN_USB })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: BTN_USB })).toBeNull();
   });
 
   it('opens Unity logs from the connection toolbar', async () => {
@@ -195,4 +197,20 @@ it('uses the detected phone IP and accepts a manual address', async () => {
   await userEvent.type(input, '10.1.2.7');
   await userEvent.click(screen.getByRole('button', { name: 'IP 直连' }));
   expect(onDirect).toHaveBeenCalledWith('10.1.2.7');
+});
+
+it('restores manual IP after reopening and only displays the active mode controls', async () => {
+  const onModeChange = vi.fn();
+  const app = renderBar({ onDirect: noop, onAutoconnect: noop, onModeChange });
+  expect(screen.queryByRole('button', { name: '开启小游戏监听' })).toBeNull();
+  await userEvent.type(screen.getByLabelText('手机 IP'), '10.1.2.3');
+  await userEvent.click(screen.getByRole('button', { name: '小程序' }));
+  expect(onModeChange).toHaveBeenCalledWith('mini');
+  app.unmount();
+  const mini = renderBar({ mode: 'mini', onAutoconnect: noop, onDirect: noop });
+  expect(screen.queryByLabelText('手机 IP')).toBeNull();
+  expect(screen.queryByLabelText(LABEL_PACKAGE)).toBeNull();
+  mini.unmount();
+  renderBar({ onDirect: noop });
+  expect(screen.getByLabelText('手机 IP')).toHaveValue('10.1.2.3');
 });

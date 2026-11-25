@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera } from 'lucide-react';
 
+import { readSetting, writeSetting } from '../lib/connectionPreferences';
+
 interface Thumbnail {
   id: string;
   frame: number;
@@ -40,7 +42,7 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, start
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [wireless, setWireless] = useState(false);
-  const [manualAddress, setAddress] = useState<string>();
+  const [manualAddress, setAddress] = useState(() => readSetting('wirelessAddress'));
   const address = manualAddress ?? wirelessAddress ?? '';
   const [preview, setPreview] = useState(false);
   const [error, setError] = useState('');
@@ -91,7 +93,7 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, start
         {startWireless && <label><input type="checkbox" checked={wireless} disabled={busy || strip.enabled}
           onChange={(event) => setWireless(event.target.checked)} />无线截图</label>}
         {wireless && <input className="input host" aria-label="无线 ADB 地址" placeholder="手机 IP:连接端口" value={address}
-          disabled={busy || strip.enabled} onChange={(event) => setAddress(event.target.value)} />}
+          disabled={busy || strip.enabled} onChange={(event) => { setAddress(event.target.value); writeSetting('wirelessAddress', event.target.value); }} />}
         {wireless && enableWireless && !connected && <button type="button" className="btn ghost" disabled={busy}
           title="在已授权的 USB 手机上开启 ADB TCP 5555 并填入 Wi-Fi 地址" onClick={async () => {
             setBusy(true); setError('');

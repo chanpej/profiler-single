@@ -54,3 +54,13 @@ describe('ProgressPopup', () => {
     expect(screen.getByRole('dialog', { name: '正在读取存档…' })).toBeInTheDocument();
   });
 });
+
+it.each(['upac', 'data'])('reveals the exact completed .%s export', async (extension) => {
+  const path = `D:\\测试 录制\\boss, $1.${extension}`;
+  const onReveal = vi.fn().mockResolvedValue(undefined);
+  const { rerender } = render(<ProgressPopup progress={null} save={{ path, percent: 99 }} onReveal={onReveal} />);
+  expect(screen.queryByRole('button', { name: '打开文件夹' })).toBeNull();
+  rerender(<ProgressPopup progress={null} save={{ path, percent: 100 }} onReveal={onReveal} />);
+  await userEvent.click(screen.getByRole('button', { name: '打开文件夹' }));
+  expect(onReveal).toHaveBeenCalledWith(path);
+});

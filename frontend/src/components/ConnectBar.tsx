@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { Trash2, Unplug, Usb } from 'lucide-react';
 import type { Status } from '../types';
 
+import { readSetting, writeSetting, type ConnectionMode } from '../lib/connectionPreferences';
+
 interface Props {
+  mode: ConnectionMode;
+  onModeChange: (mode: ConnectionMode) => void;
   phones?: { ip: string; endpoint: string; error: string; devices: { serial: string; model: string; brand: string; android: string; sdk: string; abi: string; screen: string; memory: string; ip: string; endpoint: string }[] };
   status: Status;
   busy: boolean;
@@ -22,7 +26,7 @@ export function ConnectBar({
   status,
   busy,
   packageId,
-  phones, onPackageIdChange,
+  phones, mode, onModeChange, onPackageIdChange,
   onDisconnect,
   onUSB,
   onDirect,
@@ -32,12 +36,12 @@ export function ConnectBar({
   onUnityLogs,
 }: Props) {
   const [showPhones, setShowPhones] = useState(false);
-  const [manualIP, setDeviceIP] = useState<string>();
+  const [manualIP, setDeviceIP] = useState(() => readSetting('appIP'));
   const deviceIP = manualIP ?? phones?.ip ?? '';
   const unityLabel = status.device.unityVersion === '' ? 'Unity 未知' : `Unity ${status.device.unityVersion}`;
   const auto = status.transport === 'autoconnect';
   const live = status.connected || !!status.reconnecting;
-  const canUSB = !live || (auto && !status.connected);
+  const canUSB = mode === 'app' && !live;
   const canConnect = packageId.trim() !== '' && !busy && canUSB;
   const addressLabel = autoconnectAddresses?.join(' / ') || '暂无 IPv4';
   const address = autoconnectAddresses && (
@@ -48,7 +52,11 @@ export function ConnectBar({
 
   return (
     <div className="connect-bar">
-      <input
+      <div className="connection-modes" role="group" aria-label="连接模式">
+        <button type="button" disabled={busy} aria-pressed={mode === 'mini'} onClick={() => onModeChange('mini')}>小程序</button>
+        <button type="button" disabled={busy} aria-pressed={mode === 'app'} onClick={() => onModeChange('app')}>App</button>
+      </div>
+      {mode === 'app' && <input
         className="input package-id-input"
         value={packageId}
         onChange={(e) => onPackageIdChange(e.target.value)}
@@ -57,7 +65,8 @@ export function ConnectBar({
         title="Android 应用包名，用于 adb forward 到 localabstract:Unity-{包名}"
         spellCheck={false}
         disabled={busy}
-      />
+
+      />}
       {live ? (
         <>
           <span className={`conn-dot ${status.connected ? 'on' : 'wait'}`} aria-hidden />
@@ -93,7 +102,7 @@ export function ConnectBar({
       ) : (
         <>
           <span className="conn-dot" aria-hidden />
-          {onAutoconnect && (
+          {mode === 'mini' && onAutoconnect && (
             <>
               <button type="button" className="btn minigame-listener-button" disabled={busy} onClick={onAutoconnect}
                 title="监听 WebSocket 37100，接收 Autoconnected Player 实时采样">
@@ -122,7 +131,7 @@ export function ConnectBar({
           const host = deviceIP.trim();
           if (host && !busy) onDirect(host);
         }}>
-          <input className="input host" value={deviceIP} onChange={(event) => setDeviceIP(event.target.value)}
+          <input className="input host" value={deviceIP} onChange={(event) => { setDeviceIP(event.target.value); writeSetting('appIP', event.target.value); }}
             placeholder="手机 IP" aria-label="手机 IP" spellCheck={false} disabled={busy} />
           <button type="submit" className="btn" disabled={busy || !deviceIP.trim()}>IP 直连</button>
         </form>
