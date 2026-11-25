@@ -308,12 +308,28 @@ func TestImportUPPCReplaysFullMemoryCounters(t *testing.T) {
 
 func TestExportAndImportUPACReplaysRawPD3U(t *testing.T) {
 	source := newTestService()
+	var progress []ExportProgressEvent
+	source.emit = func(name string, event any) {
+		if name == ExportProgressEventName {
+			progress = append(progress, event.(ExportProgressEvent))
+		}
+	}
 	for _, body := range unityprofiler.SampleProfilerCapture() {
 		source.onRaw(body)
 	}
 	path := filepath.Join(t.TempDir(), "session.upac")
 	if err := source.ExportCapture(path); err != nil {
 		t.Fatalf("ExportCapture: %v", err)
+	}
+	if len(progress) == 0 || progress[len(progress)-1].Percent != 99 {
+		t.Fatalf("expected write progress before completion: %+v", progress)
+	}
+	previous := 0
+	for _, event := range progress {
+		if event.Path != path || event.Percent <= previous || event.Percent >= 100 {
+			t.Fatalf("invalid write progress: %+v", progress)
+		}
+		previous = event.Percent
 	}
 
 	loaded := newTestService()

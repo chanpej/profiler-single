@@ -153,7 +153,7 @@ describe('ProfilerView', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
     expect(screen.getByRole('tab', { name: 'Timeline' })).toHaveAttribute('aria-selected', 'true');
-    expect(chart).not.toHaveAttribute('data-frame-range');
+    expect(chart).toHaveAttribute('data-frame-range', '0:0');
 
     await userEvent.click(screen.getByRole('tab', { name: 'Left Heavy' }));
     expect(chart).toHaveAttribute('data-frame-range', '1:2');
@@ -191,9 +191,12 @@ describe('ProfilerView', () => {
     const plot = screen.getByTestId('cpu-timeline-plot');
     const view = screen.getByTestId('cpu-timeline-window');
     const width = 320;
+    const cpuChart = screen.getByTestId('profiler-chart-cpu').querySelector('.profiler-chart-canvas');
+    expect(cpuChart).toHaveAttribute('data-frame-range', '2:2');
     Object.defineProperty(plot, 'clientWidth', { value: THREAD_LABEL_W + width });
     fireEvent.wheel(plot, { clientX: THREAD_LABEL_W + width / 2, deltaY: 100 });
     expect(view).toHaveAttribute('data-span', '20');
+    expect(cpuChart).toHaveAttribute('data-frame-range', '1:2');
     const start = Number(view.getAttribute('data-start'));
     const click = { clientX: THREAD_LABEL_W + width / 20, clientY: 55, button: 0, pointerId: 1 };
     fireEvent.pointerDown(plot, click);

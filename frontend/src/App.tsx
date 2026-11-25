@@ -11,7 +11,7 @@ import { TitleBar } from './components/TitleBar';
 import { MenuBar } from './components/MenuBar';
 import { AppDialog } from './components/AppDialog';
 import { ErrorPopup } from './components/ErrorPopup';
-import { ProgressPopup } from './components/ProgressPopup';
+import { ProgressPopup, type SaveProgress } from './components/ProgressPopup';
 import { ConnectBar } from './components/ConnectBar';
 import { FrameTable } from './components/FrameTable';
 import { AnalysisView } from './components/AnalysisView';
@@ -52,6 +52,8 @@ function App() {
   const [autoconnectAddresses, setAutoconnectAddresses] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [importProgress, setImportProgress] = useState<ImportProgressEvent | null>(null);
+  const [saveProgress, setSaveProgress] = useState<SaveProgress | null>(null);
+  const saving = useRef(false);
   const lastRefresh = useRef(0);
   const statusRef = useRef(status);
   const shownLastError = useRef('');
@@ -77,9 +79,14 @@ function App() {
     const offImport = api.onImportProgress((ev) => {
       if (importing.current) setImportProgress(ev);
     });
+    const offExport = api.onExportProgress(({ path, percent }) => {
+      setSaveProgress((current) => current?.path === path && current.percent !== null && percent > current.percent
+        ? { ...current, percent } : current);
+    });
     return () => {
       offTick();
       offImport();
+      offExport();
     };
   }, [refresh]);
 
@@ -143,6 +150,7 @@ function App() {
   };
 
   const onImport = () => guard(async () => {
+    if (saving.current) return;
     const path = await captureDialogs.open();
     if (!path) return;
     importing.current = true;
@@ -154,23 +162,27 @@ function App() {
       setImportProgress(null);
     }
   });
-  const onExport = () => guard(async () => {
-    const path = await captureDialogs.save();
-    if (path) await api.exportCapture(path);
-  });
-  const [exportingUnityData, setExportingUnityData] = useState(false);
-  const onExportUnityData = () => guard(async () => {
-    if (exportingUnityData) return;
-    setExportingUnityData(true);
-    try {
-      const path = await captureDialogs.save('data');
-      if (!path) return;
-      const editor = await captureDialogs.pickEditor();
-      if (editor) await api.exportUnityData(path, editor);
-    } finally {
-      setExportingUnityData(false);
-    }
-  });
+  const saveRecording = (unityData: boolean) => {
+    if (saving.current || busy) return;
+    saving.current = true;
+    void guard(async () => {
+      try {
+        const path = await captureDialogs.save(unityData ? 'data' : 'upac');
+        if (!path) return;
+        const editor = unityData ? await captureDialogs.pickEditor() : undefined;
+        if (unityData && !editor) return;
+        setSaveProgress({ path, percent: editor ? null : 0 });
+        if (editor) await api.exportUnityData(path, editor);
+        else await api.exportCapture(path);
+        setSaveProgress({ path, percent: 100 });
+      } catch (err) {
+        setSaveProgress(null);
+        throw err;
+      } finally {
+        saving.current = false;
+      }
+    });
+  };
   const onClear = () => guard(() => api.clear());
   const onDeepProfiling = (on: boolean) => {
     guard(() => api.setDeepProfiling(on));
@@ -183,9 +195,9 @@ function App() {
       <TitleBar controls={windowControls} />
       <MenuBar
         onImport={onImport}
-        onExport={onExport}
-        onExportUnityData={onExportUnityData}
-        exportingUnityData={exportingUnityData}
+        onExport={() => saveRecording(false)}
+        onExportUnityData={() => saveRecording(true)}
+        saving={busy}
         onClear={onClear}
         onFrames={() => setOverlay('frames')}
         onAnalysis={() => setOverlay('analysis')}
@@ -232,7 +244,7 @@ function App() {
       <StatusBar status={status} busy={busy} />
 
       <ErrorPopup message={error} open={error !== ''} onClose={() => setError('')} />
-      <ProgressPopup progress={importProgress} />
+      <ProgressPopup progress={importProgress} save={saveProgress} onClose={() => setSaveProgress(null)} />
 
       <AppDialog
         title={overlay ? overlayTitle[overlay] : ''}

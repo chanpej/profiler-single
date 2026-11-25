@@ -12,6 +12,7 @@ import (
 
 	"unityperf/internal/profileframe"
 	"unityperf/internal/protocol"
+	"unityperf/internal/unityprofiler"
 )
 
 const (
@@ -108,9 +109,7 @@ func (s *Session) Clear() {
 	}
 }
 
-// ClearRecordedData starts a new capture interval while retaining the PD3U
-// stream header. Subsequent raw chunks can therefore be exported and replayed
-// without retaining data from before the user pressed Clear.
+// ClearRecordedData starts a new interval with the current Player's stream metadata.
 func (s *Session) ClearRecordedData() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -118,7 +117,20 @@ func (s *Session) ClearRecordedData() {
 	for i := range s.frames {
 		s.frames[i] = profileframe.Frame{}
 	}
-	s.raw, s.rawBytes = nil, 0
+	var context [][]byte
+	var contextBytes int
+	for _, body := range s.raw {
+		if isProfilerStreamHeader(body) {
+			context = append(context[:0], body)
+			contextBytes = len(body)
+			continue
+		}
+		if chunk, err := unityprofiler.ParseChunk(body); err == nil && chunk.IsMetadata() {
+			context = append(context, body)
+			contextBytes += len(body)
+		}
+	}
+	s.raw, s.rawBytes = context, contextBytes
 }
 
 // ClearAll 清空帧数据与原始 Profiler 流（重新连接时使用）。

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ProgressPopup } from './ProgressPopup';
 import type { ImportProgressEvent } from '../types';
 
@@ -15,6 +16,26 @@ function progress(over: Partial<ImportProgressEvent> = {}): ImportProgressEvent 
 }
 
 describe('ProgressPopup', () => {
+  it('保存时更新百分比，完成后显示路径并可确认', async () => {
+    const path = 'D:\\captures\\boss.upac';
+    const onClose = vi.fn();
+    const { rerender } = render(<ProgressPopup progress={null} save={{ path, percent: 42 }} onClose={onClose} />);
+    expect(screen.getByRole('progressbar', { name: '保存进度' })).toHaveAttribute('aria-valuenow', '42');
+    expect(screen.getByText('boss.upac')).toBeInTheDocument();
+    expect(screen.queryByText('保存完成')).not.toBeInTheDocument();
+
+    rerender(<ProgressPopup progress={null} save={{ path, percent: 100 }} onClose={onClose} />);
+    expect(screen.getByRole('dialog', { name: '保存完成' })).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByRole('status')).toHaveTextContent(path);
+    await userEvent.click(screen.getByRole('button', { name: '确定' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('Unity Editor 导出期间显示动态进度条', () => {
+    render(<ProgressPopup progress={null} save={{ path: 'boss.data', percent: null }} />);
+    expect(screen.getByRole('dialog', { name: 'Unity 正在导出 .data…' })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: '保存进度' })).not.toHaveAttribute('aria-valuenow');
+  });
   it('无进度时不渲染', () => {
     render(<ProgressPopup progress={null} />);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

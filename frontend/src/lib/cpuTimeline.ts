@@ -36,6 +36,21 @@ export interface TimelineThread {
   name: string;
   bars: TimelineBar[];
   maxDepth: number;
+  neighbors?: BarGroup[];
+}
+
+interface BarGroup {
+  startMs: number;
+  endMs: number;
+  bars: TimelineBar[];
+}
+
+export function* barsInWindow(thread: TimelineThread, win: TimeWindow) {
+  const end = windowEnd(win);
+  for (const group of thread.neighbors ?? []) {
+    if (group.endMs >= win.startMs && group.startMs < end) yield* group.bars;
+  }
+  yield* thread.bars;
 }
 
 export interface TimeWindow {
@@ -221,30 +236,41 @@ export function layoutTimeline(nodes: SampleNode[], frame: FrameData | null, thr
   return { threads, startMs, totalMs: Math.max(totalMs, MIN_SPAN_MS) };
 }
 
+const neighborLayouts = new WeakMap<CpuTimelineFrame, TimelineLayout>();
+
+function layoutNeighbor(frame: CpuTimelineFrame): TimelineLayout {
+  const cached = neighborLayouts.get(frame);
+  if (cached) return cached;
+  const layout = layoutTimeline([], null, frame.threads);
+  for (const thread of layout.threads) {
+    for (const bar of thread.bars) {
+      bar.id = `${frame.frameIndex}:${bar.id}`;
+      bar.ghost = true;
+      bar.startMs += frame.offsetMs;
+    }
+  }
+  neighborLayouts.set(frame, layout);
+  return layout;
+}
+
 export function layoutTimelineContext(current: TimelineLayout, context: CpuTimelineFrame[]): TimelineLayout {
   if (!context.some((frame) => !frame.selected)) return current;
-  const threads = new Map(current.threads.map((thread) => [thread.id, { ...thread, bars: [] as TimelineBar[] }]));
+  const threads = new Map<string, TimelineThread>(current.threads.map((thread) => [thread.id, { ...thread, neighbors: [] }]));
   let { startMs, totalMs } = current;
   for (const frame of context) {
     if (frame.selected) continue;
-    const layout = layoutTimeline([], null, frame.threads);
+    const layout = layoutNeighbor(frame);
     startMs = Math.min(startMs, frame.offsetMs + layout.startMs);
     totalMs = Math.max(totalMs, frame.offsetMs + Math.max(frame.durationMs, layout.totalMs));
     for (const thread of layout.threads) {
       let lane = threads.get(thread.id);
       if (!lane) {
-        lane = { ...thread, bars: [] };
+        lane = { ...thread, bars: [], neighbors: [] };
         threads.set(thread.id, lane);
       }
       lane.maxDepth = Math.max(lane.maxDepth, thread.maxDepth);
-      for (const bar of thread.bars) {
-        lane.bars.push({ ...bar, id: `${frame.frameIndex}:${bar.id}`, ghost: true, startMs: bar.startMs + frame.offsetMs });
-      }
+      lane.neighbors!.push({ startMs: frame.offsetMs + layout.startMs, endMs: frame.offsetMs + layout.totalMs, bars: thread.bars });
     }
-  }
-  for (const thread of current.threads) {
-    const lane = threads.get(thread.id);
-    if (lane) lane.bars = lane.bars.concat(thread.bars);
   }
   return { startMs, totalMs, threads: [...threads.values()] };
 }

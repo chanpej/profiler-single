@@ -199,6 +199,11 @@ export interface TickEvent {
   recording?: boolean;
 }
 
+export interface ExportProgressEvent {
+  path: string;
+  percent: number;
+}
+
 export interface ImportProgressEvent {
   phase: 'read' | 'parse' | string;
   done: number;

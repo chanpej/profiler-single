@@ -13,6 +13,7 @@ import {
   layoutHeight,
   layoutTimeline,
   layoutTimelineContext,
+  barsInWindow,
   msFromX,
   panDeltaFromPixels,
   panWindow,
@@ -147,6 +148,21 @@ describe('TimeWindow', () => {
 });
 
 describe('hitTest / ticks', () => {
+  it('reuses loaded bars and skips offscreen frame groups while panning a dense capture', () => {
+    const samples = Array.from({ length: 100 }, (_, index) => ({ ...tree[0], children: [], startMs: index / 10, totalMs: 0.1 }));
+    const frames = Array.from({ length: 100 }, (_, index) => ({
+      frameIndex: index, selected: false, offsetMs: index * 10, durationMs: 10,
+      threads: [{ id: 'main', name: 'Main Thread', offsetMs: 0, samples }],
+    }));
+    const current = layoutTimeline([], null);
+    const before = layoutTimelineContext(current, frames.slice(0, 90));
+    const after = layoutTimelineContext(current, frames);
+    const viewport = { startMs: 501, spanMs: 8 };
+    const candidates = [...barsInWindow(after.threads[0], viewport)];
+    expect(candidates).toHaveLength(100);
+    expect(candidates[0]).toBe([...barsInWindow(before.threads[0], viewport)][0]);
+  });
+
   it('aligns context samples by player frame offset and stable thread IDs', () => {
     const current = layoutTimeline(tree, null);
     const merged = layoutTimelineContext(current, [{
@@ -158,10 +174,11 @@ describe('hitTest / ticks', () => {
     expect(merged.startMs).toBe(-16);
     expect(merged.totalMs).toBe(33);
     expect(merged.threads.map((thread) => thread.id)).toEqual(['main', 'worker']);
-    expect(merged.threads[0].bars[0]).toMatchObject({ startMs: -14, ghost: true });
-    const mainBars = merged.threads[0].bars;
+    const mainBars = [...barsInWindow(merged.threads[0], { startMs: -16, spanMs: 49 })];
+    expect(mainBars[0]).toMatchObject({ startMs: -14, ghost: true });
     expect(mainBars[mainBars.length - 1].ghost).toBeUndefined();
-    expect(merged.threads[1].bars[0]).toMatchObject({ startMs: -16, ghost: true });
+    expect([...barsInWindow(merged.threads[1], { startMs: -16, spanMs: 2 })][0]).toMatchObject({ startMs: -16, ghost: true });
+    expect([...barsInWindow(merged.threads[1], { startMs: 1, spanMs: 2 })]).toEqual([]);
   });
   it('projects actual sample widths and clips only the parts outside the viewport', () => {
     const { threads } = layoutTimeline(tree, null);

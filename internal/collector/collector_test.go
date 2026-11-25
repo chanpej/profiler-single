@@ -1,12 +1,18 @@
 package collector
 
 import (
+	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
+	"unityperf/internal/capture"
 	"unityperf/internal/profileframe"
 	"unityperf/internal/protocol"
+	"unityperf/internal/unityprofiler"
+	"unityperf/internal/upac"
 )
 
 func frameN(i int) protocol.FrameData {
@@ -388,23 +394,82 @@ func TestRawRoundTrip(t *testing.T) {
 	}
 }
 
-func TestClearRecordedDataRetainsOnlyStreamHeader(t *testing.T) {
+func TestClearRecordedDataKeepsCurrentMetadataForReplay(t *testing.T) {
 	s := NewSession(4)
-	header := []byte{'P', 'D', '3', 'U', 1}
+	header := unityprofiler.EncodeStreamHeader(unityprofiler.StreamHeader{
+		FormatVersion: unityprofiler.Unity2022StreamVersion, MainThreadID: 1,
+	}, 2022, 3, 47, 2, 1)
+	var metadata unityprofiler.RecordWriter
+	metadata.CategoryDef(1, "Scripts")
+	metadata.MarkerDef(1, 0, 1, "Player.Update")
+	meta := unityprofiler.EncodeChunk(0, -1, metadata.Bytes())
+	var events unityprofiler.RecordWriter
+	events.FrameBoundary(2, 10_000_000)
+	events.Begin(1, 10_000_000)
+	events.End(1, 15_000_000)
+	events.FrameBoundary(3, 20_000_000)
+	newEvents := unityprofiler.EncodeChunk(1, 1, events.Bytes())
 	s.AppendRaw(header)
-	s.AppendRaw([]byte{9, 8, 7})
+	s.AppendRaw(unityprofiler.EncodeChunk(0, -1, nil))
+	s.AppendRaw(header)
+	s.AppendRaw(meta)
+	s.AppendRaw(unityprofiler.EncodeChunk(0, 1, nil))
 	s.Append(frameN(1))
 
 	s.ClearRecordedData()
+	s.ClearRecordedData()
 	got := s.Raw()
-	if s.Len() != 0 || s.Total() != 0 || len(got) != 1 || !bytesEqual(got[0], header) {
+	if s.Len() != 0 || s.Total() != 0 || len(got) != 2 || !bytesEqual(got[0], header) || !bytesEqual(got[1], meta) {
 		t.Fatalf("after ClearRecordedData: frames=%d total=%d raw=%v", s.Len(), s.Total(), got)
 	}
-	s.AppendRaw([]byte{6, 5})
-	got = s.Raw()
-	if len(got) != 2 || !bytesEqual(got[0], header) || !bytesEqual(got[1], []byte{6, 5}) {
-		t.Fatalf("raw after next capture = %v", got)
+	s.AppendRaw(newEvents)
+	path := filepath.Join(t.TempDir(), "after-clear.upac")
+	if err := upac.SaveFile(path, upac.File{Raw: s.Raw()}); err != nil {
+		t.Fatal(err)
 	}
+	archive, err := upac.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames, err := unityprofiler.ReplayFrames(archive.Raw)
+	if err != nil || len(frames) != 1 || len(frames[0].MainThread) != 1 || frames[0].MainThread[0].Name != "Player.Update" {
+		t.Fatalf("replay after clear: %v, %v", frames, err)
+	}
+}
+
+func TestClearRecordedDataExportsTuanjieRecording(t *testing.T) {
+	beforePath := os.Getenv("UNITYPERF_TEST_BEFORE_CLEAR")
+	afterPath := os.Getenv("UNITYPERF_TEST_AFTER_CLEAR")
+	editor := os.Getenv("UNITYPERF_TEST_TUANJIE_EDITOR")
+	if beforePath == "" || afterPath == "" || editor == "" {
+		t.Skip("set UNITYPERF_TEST_BEFORE_CLEAR, UNITYPERF_TEST_AFTER_CLEAR and UNITYPERF_TEST_TUANJIE_EDITOR")
+	}
+	before, err := upac.LoadFile(beforePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := upac.LoadFile(afterPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(4)
+	for _, chunk := range before.Raw {
+		session.AppendRaw(chunk)
+	}
+	session.ClearRecordedData()
+	for _, chunk := range after.Raw[1:] {
+		session.AppendRaw(chunk)
+	}
+	frames, err := unityprofiler.ReplayFrames(session.Raw())
+	if err != nil || len(frames) == 0 {
+		t.Fatalf("replay after clear: %d frames, %v", len(frames), err)
+	}
+	output := filepath.Join(t.TempDir(), "export.data")
+	count, err := capture.ExportWithEditor(context.Background(), editor, output, session.Raw())
+	if err != nil || count == 0 {
+		t.Fatalf("Tuanjie export after clear: %d frames, %v", count, err)
+	}
+	t.Logf("replayed %d frames and exported %d frames", len(frames), count)
 }
 
 func bytesEqual(a, b []byte) bool {

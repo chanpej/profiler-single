@@ -998,8 +998,15 @@ body {
   white-space: nowrap;
   max-width: 42%;
 }
-.cpu-timeline-label-style {
+.cpu-timeline-style-control {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
   margin-left: auto;
+  font-size: 12px;
+}
+.cpu-timeline-label-style {
   flex-shrink: 0;
   background: var(--bg-panel);
   color: var(--text);
@@ -1008,6 +1015,7 @@ body {
   font: inherit;
 }
 .cpu-timeline-fit {
+  flex-shrink: 0;
   height: 22px;
   padding: 0 8px;
   font-size: 11px;
@@ -1326,6 +1334,23 @@ code {
   height: 100%;
   background: var(--accent);
   transition: width 0.12s linear;
+}
+
+.progress-bar-fill.is-indeterminate {
+  width: 35%;
+  animation: progress-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes progress-slide {
+  from { transform: translateX(0); }
+  to { transform: translateX(185%); }
+}
+
+.progress-popup-path {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .progress-popup-pct {

@@ -70,6 +70,7 @@ export function ProfilerView({
   const [pickedFrame, setPickedFrame] = useState<{ index: number; frame: FrameData } | null>(null);
   const [hierarchy, setHierarchy] = useState<SampleNode[]>([]);
   const [heavyRange, setHeavyRange] = useState<FrameRange | null>(null);
+  const [timelineRange, setTimelineRange] = useState<FrameRange | null>(null);
   const [cpuTab, setCpuTab] = useState<CpuTab>('hierarchy');
   const [detailH, setDetailH] = useState(loadDetailHeight);
   const [yAxisMax, setYAxisMax] = useState<Partial<Record<ProfilerModuleId, number>>>({
@@ -80,6 +81,17 @@ export function ProfilerView({
 
   const total = totalCount ?? frames?.length ?? 0;
   const validHeavyRange = heavyRange && heavyRange.end < total ? heavyRange : null;
+  const cpuRange = cpuTab === 'timeline' ? timelineRange : cpuTab === 'left-heavy' ? validHeavyRange : null;
+  const syncTimelineRange = useCallback((range: FrameRange | null) => {
+    setTimelineRange(range);
+    if (!range) return;
+    setVp((previous) => {
+      const current = clampViewport(previous, total);
+      if (range.end >= current.start && range.start < current.start + current.visible) return previous;
+      const start = range.start < current.start ? range.start : range.end - current.visible + 1;
+      return { ...previous, start: Math.max(0, start), selected: current.selected, follow: false };
+    });
+  }, [total]);
   const windowed = useMemo(() => clampViewport(vp, total), [vp, total]);
   const localSelected = selectedInWindow(windowed);
   const picked = frames?.[windowed.selected] ?? (pickedFrame?.index === windowed.selected ? pickedFrame.frame : null);
@@ -312,8 +324,8 @@ export function ProfilerView({
             selectedIndex={localSelected}
             active={active === m.id}
             onSelectFrame={onSelectLocal}
-            frameRange={m.id === 'cpu' && active === 'cpu' && cpuTab === 'left-heavy' && validHeavyRange ? {
-              start: validHeavyRange.start - sliceStart.current, end: validHeavyRange.end - sliceStart.current,
+            frameRange={m.id === 'cpu' && active === 'cpu' && cpuRange ? {
+              start: cpuRange.start - sliceStart.current, end: cpuRange.end - sliceStart.current,
             } : undefined}
             onSelectRange={m.id === 'cpu' && getHeavyProfile ? (range) => {
               if (sliceStart.current !== windowed.start) return;
@@ -360,6 +372,7 @@ export function ProfilerView({
           onPointerCancel={onResizePointerUp}
         />
         <ProfilerDetail moduleId={active} frame={picked} hierarchy={hierarchy} callStacks={callStacks}
+          onTimelineRange={syncTimelineRange}
           getHeavyProfile={getHeavyProfile} heavyRange={validHeavyRange} onHeavyRange={setHeavyRange}
           cpuTab={cpuTab} onCpuTabChange={setCpuTab} totalFrames={total}
           getTimeline={getTimeline} timelineSelection={windowed.selected} onTimelineSeek={clampSeek}

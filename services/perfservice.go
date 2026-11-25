@@ -34,6 +34,13 @@ const TickEventName = "perf:tick"
 // ImportProgressEventName 是加载存档解析进度事件名。
 const ImportProgressEventName = "perf:import-progress"
 
+const ExportProgressEventName = "perf:export-progress"
+
+type ExportProgressEvent struct {
+	Path    string `json:"path"`
+	Percent int    `json:"percent"`
+}
+
 const importProgressMinInterval = 80 * time.Millisecond
 
 const tickInterval = 250 * time.Millisecond
@@ -539,7 +546,11 @@ func (p *PerfService) Stats() collector.Stats {
 func (p *PerfService) Clear() {
 	connected := p.client.Connected()
 	p.mu.Lock()
-	p.session.ClearRecordedData()
+	if connected && p.captureRaw {
+		p.session.ClearRecordedData()
+	} else {
+		p.session.ClearAll()
+	}
 	p.resetScreenLocked(false)
 	if connected || p.screen.epoch > 0 {
 		p.screen.epoch = 1
@@ -689,11 +700,22 @@ func (p *PerfService) ExportCapture(path string) error {
 		hs = p.liveHS
 	}
 	screen := p.screenTrackLocked()
+	emit := p.emit
 	p.mu.Unlock()
 	if len(raw) == 0 {
 		return errors.New("没有可导出的原始 PD3U 数据")
 	}
-	if err := upac.SaveFile(path, upac.File{Handshake: hs, Raw: raw, Screen: screen}); err != nil {
+	lastUpdate := time.Time{}
+	lastPercent := 0
+	archive := upac.File{Handshake: hs, Raw: raw, Screen: screen}
+	if err := upac.SaveFileWithProgress(path, archive, func(done, total int) {
+		percent := int(int64(done) * 99 / int64(total))
+		if emit != nil && percent > lastPercent && (done == total || time.Since(lastUpdate) >= importProgressMinInterval) {
+			lastPercent = percent
+			lastUpdate = time.Now()
+			emit(ExportProgressEventName, ExportProgressEvent{Path: path, Percent: percent})
+		}
+	}); err != nil {
 		return fmt.Errorf("保存 UPAC 存档失败：%w", err)
 	}
 	p.logf("已导出 %d 个原始 PD3U 分块 -> %s", len(raw), path)

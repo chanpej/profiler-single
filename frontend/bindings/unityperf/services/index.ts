@@ -7,6 +7,7 @@ export {
 };
 
 export type {
+    ExportProgressEvent,
     HeavyProfile,
     HeavySample,
     HeavyThread,

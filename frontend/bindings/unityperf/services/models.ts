@@ -5,6 +5,11 @@
 // @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 
+export interface ExportProgressEvent {
+    "path": string;
+    "percent": number;
+}
+
 export interface HeavyProfile {
     "firstFrame": number;
     "lastFrame": number;

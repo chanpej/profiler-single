@@ -3,7 +3,7 @@
 import { Events } from '@wailsio/runtime';
 import * as PerfService from '../bindings/unityperf/services/perfservice.js';
 import type { HeavySample as WireHeavySample } from '../bindings/unityperf/services/models.js';
-import type { CpuTimelineFrame, FrameData, Handshake, HeavyProfile, HeavySample, ImportProgressEvent, Report, SampleNode, Stats, Status, TickEvent } from './types';
+import type { CpuTimelineFrame, ExportProgressEvent, FrameData, Handshake, HeavyProfile, HeavySample, ImportProgressEvent, Report, SampleNode, Stats, Status, TickEvent } from './types';
 import { normalizeSampleTree } from './lib/sample';
 import type { ScreenFilmstripData } from './components/ScreenFilmstrip';
 
@@ -58,6 +58,8 @@ export const api = {
   })),
   onTick: (handler: (ev: TickEvent) => void): (() => void) =>
     Events.On('perf:tick', (ev: { data: TickEvent }) => handler(ev.data)),
+  onExportProgress: (handler: (ev: ExportProgressEvent) => void): (() => void) =>
+    Events.On('perf:export-progress', (ev: { data: ExportProgressEvent }) => handler(ev.data)),
   onImportProgress: (handler: (ev: ImportProgressEvent) => void): (() => void) =>
     Events.On('perf:import-progress', (ev: { data: ImportProgressEvent }) => handler(ev.data)),
 };

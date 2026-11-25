@@ -86,6 +86,8 @@ type Chunk struct {
 	Payload  []byte
 }
 
+func (c Chunk) IsMetadata() bool { return c.ThreadID == metaThreadID }
+
 // ParseChunk 解析一块 Profiler 数据流分块。
 func ParseChunk(b []byte) (Chunk, error) {
 	if len(b) < chunkHeaderSize+chunkFooterSize {

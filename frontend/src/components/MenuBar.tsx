@@ -6,7 +6,7 @@ interface Props {
   onImport: () => void;
   onExport: () => void;
   onExportUnityData?: () => void;
-  exportingUnityData?: boolean;
+  saving?: boolean;
   onClear: () => void;
   onFrames: () => void;
   onAnalysis: () => void;
@@ -14,7 +14,7 @@ interface Props {
 
 /** 主菜单栏：侧边栏功能迁入，主界面始终保持采集视图。 */
 export function MenuBar({
-  onImport, onExport, onExportUnityData, exportingUnityData, onClear, onFrames, onAnalysis,
+  onImport, onExport, onExportUnityData, saving, onClear, onFrames, onAnalysis,
 }: Props) {
   const [open, setOpen] = useState<MenuId | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -65,12 +65,12 @@ export function MenuBar({
             <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onImport)}>
               加载数据
             </button>
-            <button type="button" className="menubar-cmd" role="menuitem" onClick={() => run(onExport)}>
+            <button type="button" className="menubar-cmd" role="menuitem" disabled={saving} onClick={() => run(onExport)}>
               保存数据 (.upac)
             </button>
             {onExportUnityData && (
-              <button type="button" className="menubar-cmd" role="menuitem" disabled={exportingUnityData} onClick={() => run(onExportUnityData)}>
-                {exportingUnityData ? '正在导出 Unity .data…' : '导出 Unity .data'}
+              <button type="button" className="menubar-cmd" role="menuitem" disabled={saving} onClick={() => run(onExportUnityData)}>
+                导出 Unity .data
               </button>
             )}
 

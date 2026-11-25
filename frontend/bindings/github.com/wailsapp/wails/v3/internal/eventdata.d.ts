@@ -12,6 +12,7 @@ import type * as services$0 from "../../../../../unityperf/services/models.js";
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "perf:export-progress": services$0.ExportProgressEvent;
             "perf:import-progress": services$0.ImportProgressEvent;
             "perf:tick": services$0.TickEvent;
         }

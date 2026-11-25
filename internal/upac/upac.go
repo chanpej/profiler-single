@@ -81,6 +81,10 @@ func readHeader(r io.Reader) (header, error) {
 
 // SaveFile writes a native .upac archive.
 func SaveFile(path string, file File) error {
+	return SaveFileWithProgress(path, file, nil)
+}
+
+func SaveFileWithProgress(path string, file File, progress func(done, total int)) error {
 	if len(file.Raw) == 0 {
 		return ErrNoRawData
 	}
@@ -88,7 +92,7 @@ func SaveFile(path string, file File) error {
 	if err != nil {
 		return err
 	}
-	if err := Encode(out, file); err != nil {
+	if err := encode(out, file, progress); err != nil {
 		_ = out.Close()
 		return err
 	}
@@ -97,6 +101,10 @@ func SaveFile(path string, file File) error {
 
 // Encode serializes a native archive to w.
 func Encode(w io.Writer, file File) error {
+	return encode(w, file, nil)
+}
+
+func encode(w io.Writer, file File, progress func(done, total int)) error {
 	if len(file.Raw) == 0 {
 		return ErrNoRawData
 	}
@@ -142,6 +150,9 @@ func Encode(w io.Writer, file File) error {
 			return err
 		}
 		totalRawBytes += len(body)
+		if progress != nil {
+			progress(i+1, len(file.Raw))
+		}
 	}
 	if flags&screenFlag != 0 {
 		var length [4]byte

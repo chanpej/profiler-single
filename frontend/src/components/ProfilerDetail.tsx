@@ -27,6 +27,7 @@ interface Props {
   timelineSelection?: number;
   timelineFallback?: { index: number; frame: FrameData } | null;
   onTimelineSeek?: (index: number) => void;
+  onTimelineRange?: (range: FrameRange | null) => void;
   refreshTimeline?: boolean;
   getHeavyProfile?: (start: number, end: number) => Promise<HeavyProfile>;
   heavyRange?: FrameRange | null;
@@ -41,7 +42,7 @@ type MemTab = 'simple' | 'detailed';
 
 /** 选中帧的模块详情：还原 Unity Profiler 底部面板。 */
 export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = false, getTimeline, timelineSelection = -1, timelineFallback, onTimelineSeek, refreshTimeline,
-  getHeavyProfile, heavyRange, onHeavyRange, cpuTab: controlledCpuTab, onCpuTabChange, totalFrames = 0 }: Props) {
+  getHeavyProfile, heavyRange, onHeavyRange, onTimelineRange, cpuTab: controlledCpuTab, onCpuTabChange, totalFrames = 0 }: Props) {
   const [localCpuTab, setLocalCpuTab] = useState<CpuTab>('hierarchy');
   const cpuTab = controlledCpuTab ?? localCpuTab;
   const setCpuTab = onCpuTabChange ?? setLocalCpuTab;
@@ -70,7 +71,8 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
       <div className="profiler-detail-body">
         {moduleId === 'cpu' && cpuTab === 'timeline' && timelineFrame ? (
           <TimelineDetail frame={timelineFrame} hierarchy={hierarchy} load={getTimeline} seek={onTimelineSeek}
-            index={frame ? timelineSelection : (timelineFallback?.index ?? timelineSelection)} refresh={refreshTimeline} />
+            onVisibleRange={onTimelineRange}
+            index={frame ? timelineSelection : (timelineFallback?.index ?? timelineSelection)} refresh={refreshTimeline} totalFrames={totalFrames} />
         ) : !frame ? (
           <p className="dim">选择一帧以查看详情</p>
         ) : moduleId === 'cpu' && cpuTab === 'left-heavy' && getHeavyProfile && onHeavyRange ? (
@@ -125,17 +127,21 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
   );
 }
 
-function TimelineDetail({ frame, hierarchy, load, index, refresh, seek }: {
+function TimelineDetail({ frame, hierarchy, load, index, refresh, seek, totalFrames, onVisibleRange }: {
   frame: FrameData;
   hierarchy: SampleNode[];
   load?: (index: number, frameIndex: number) => Promise<CpuTimelineFrame[]>;
   index: number;
   refresh?: boolean;
+  onVisibleRange?: (range: FrameRange | null) => void;
+  totalFrames: number;
   seek?: (index: number) => void;
 }) {
   const [loaded, setLoaded] = useState<{ index: number; frameIndex: number; rows: CpuTimelineFrame[] }>();
   const frameIndex = frame.frameIndex;
   const context = loaded?.index === index && loaded.frameIndex === frameIndex ? loaded.rows : undefined;
+  const generation = useRef(0);
+  const inFlight = useRef(new Set<string>());
   useEffect(() => {
     if (!load) return;
     let active = true;
@@ -144,7 +150,17 @@ function TimelineDetail({ frame, hierarchy, load, index, refresh, seek }: {
     const fetchThreads = async () => {
       try {
         const rows = await load(index, frameIndex);
-        if (active) setLoaded({ index, frameIndex, rows });
+        if (active) setLoaded((previous) => {
+          if (previous?.index !== index || previous.frameIndex !== frameIndex || !rows.length) {
+            return { index, frameIndex, rows };
+          }
+          const first = rows[0].frameIndex;
+          const last = rows[rows.length - 1].frameIndex;
+          return { index, frameIndex, rows: [
+            ...previous.rows.filter((row) => row.frameIndex < first), ...rows,
+            ...previous.rows.filter((row) => row.frameIndex > last),
+          ] };
+        });
       } catch {
         if (active) setLoaded((previous) => previous?.index === index && previous.frameIndex === frameIndex ? previous : { index, frameIndex, rows: [] });
       } finally {
@@ -155,14 +171,48 @@ function TimelineDetail({ frame, hierarchy, load, index, refresh, seek }: {
       }
     };
     void fetchThreads();
-    return () => { active = false; clearTimeout(timer); };
+    return () => { active = false; generation.current++; inFlight.current.clear(); clearTimeout(timer); };
   }, [load, index, frameIndex, refresh]);
+  const extend = useCallback(async (edge: CpuTimelineFrame, direction: -1 | 1) => {
+    if (!load || !context) return;
+    const center = context.findIndex((row) => row.selected);
+    if (center < 0) return;
+    const edgeIndex = index - center + (direction < 0 ? 0 : context.length - 1);
+    const epoch = generation.current;
+    const key = `${epoch}:${direction}:${edge.frameIndex}`;
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
+    try {
+      const page = await load(edgeIndex, edge.frameIndex);
+      if (epoch !== generation.current) return;
+      const pivot = page.findIndex((row) => row.selected && row.frameIndex === edge.frameIndex);
+      if (pivot < 0) return;
+      const extension = (direction < 0 ? page.slice(0, pivot) : page.slice(pivot + 1)).map((row) => ({
+        ...row, selected: false, offsetMs: edge.offsetMs + row.offsetMs - page[pivot].offsetMs,
+      }));
+      if (!extension.length) return;
+      setLoaded((previous) => {
+        if (previous?.index !== index || previous.frameIndex !== frameIndex) return previous;
+        const rows = previous.rows;
+        if (rows[direction < 0 ? 0 : rows.length - 1]?.frameIndex !== edge.frameIndex) return previous;
+        return { ...previous, rows: direction < 0 ? [...extension, ...rows] : [...rows, ...extension] };
+      });
+    } catch {
+      return;
+    } finally {
+      inFlight.current.delete(key);
+    }
+  }, [load, context, index, frameIndex]);
   const selectNeighbor = seek && context ? (neighbor: CpuTimelineFrame) => {
     const center = context.findIndex((candidate) => candidate.selected);
     const position = context.indexOf(neighbor);
     if (center >= 0 && position >= 0) seek(index + position - center);
   } : undefined;
   return <CpuTimeline frame={frame} hierarchy={load ? [] : hierarchy} context={context}
+    selectionIndex={index} onVisibleRange={onVisibleRange}
+    onExtend={extend}
+    canPageLeft={!!context && index > context.findIndex((row) => row.selected)}
+    canPageRight={!!context && index + context.length - context.findIndex((row) => row.selected) < totalFrames}
     loadingContext={!!load && context === undefined} onSelectNeighbor={selectNeighbor} />;
 }
 

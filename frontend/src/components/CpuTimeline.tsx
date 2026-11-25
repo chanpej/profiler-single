@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CpuThreadSamples, CpuTimelineFrame, FrameData, SampleNode } from '../types';
+import type { CpuThreadSamples, CpuTimelineFrame, FrameData, FrameRange, SampleNode } from '../types';
 import { formatMs } from '../lib/format';
 import {
   BAR_H,
@@ -8,6 +8,7 @@ import {
   RULER_H,
   THREAD_LABEL_W,
   barEnd,
+  barsInWindow,
   barY,
   clampWindow,
   fitWindow,
@@ -36,6 +37,11 @@ interface Props {
   threadSamples?: CpuThreadSamples[];
   context?: CpuTimelineFrame[];
   loadingContext?: boolean;
+  canPageLeft?: boolean;
+  selectionIndex?: number;
+  onVisibleRange?: (range: FrameRange | null) => void;
+  canPageRight?: boolean;
+  onExtend?: (edge: CpuTimelineFrame, direction: -1 | 1) => void;
   onSelectNeighbor?: (frame: CpuTimelineFrame) => void;
 }
 
@@ -77,7 +83,7 @@ function drawUnityLabel(ctx: CanvasRenderingContext2D, bar: TimelineBar, left: n
  * Unity Profiler 2022 CPU Timeline：线程泳道 + 嵌套采样条。
  * 滚轮缩放（锚在指针），中键拖拽平移，单击选中，双击放大到该采样。
  */
-export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_CONTEXT, loadingContext = false, onSelectNeighbor }: Props) {
+export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_CONTEXT, loadingContext = false, onSelectNeighbor, onExtend, canPageLeft, canPageRight, selectionIndex = -1, onVisibleRange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const currentFrame = context.find((candidate) => candidate.selected);
@@ -123,6 +129,25 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
   const previousLayout = useRef({ frameIndex: frame.frameIndex, fit });
   const hasSwitchedFrame = useRef(false);
   const pendingNeighbor = useRef<CpuTimelineFrame | null>(null);
+  const desiredPan = useRef<TimeWindow | null>(null);
+  const requestedEdges = useRef(new Set<string>());
+  const pagePan = useCallback((target: TimeWindow) => {
+    const clamped = clampWindow(target, layout.totalMs, layout.startMs);
+    setWin(clamped);
+    const edge = target.startMs < clamped.startMs && canPageLeft ? context[0]
+      : target.startMs > clamped.startMs && canPageRight ? context[context.length - 1] : undefined;
+    if (edge && onExtend) {
+      desiredPan.current = target;
+      const direction = target.startMs < clamped.startMs ? -1 : 1;
+      const key = `${direction}:${edge.frameIndex}`;
+      if (!requestedEdges.current.has(key)) {
+        requestedEdges.current.add(key);
+        onExtend(edge, direction);
+      }
+    } else {
+      desiredPan.current = null;
+    }
+  }, [layout.totalMs, layout.startMs, context, canPageLeft, canPageRight, onExtend]);
 
   useEffect(() => {
     const previous = previousLayout.current;
@@ -136,6 +161,8 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
       }
       setSelected('');
       setPointer(null);
+      desiredPan.current = null;
+      requestedEdges.current.clear();
       setPanning(false);
       drag.current = null;
       rangeDrag.current = null;
@@ -148,7 +175,12 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
     }
   }, [layout.totalMs, layout.startMs, frame.frameIndex, fit, loadingContext]);
 
+  useEffect(() => {
+    if (!loadingContext && !pendingNeighbor.current && desiredPan.current) pagePan(desiredPan.current);
+  }, [loadingContext, pagePan]);
+
   const selectedBar = useMemo(() => {
+    if (!selected) return null;
     for (const th of current.threads) {
       const bar = th.bars.find((b) => b.id === selected);
       if (bar) return bar;
@@ -164,8 +196,10 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
     const w = wrap.clientWidth;
     const contentH = Math.max(layoutHeight(visibleThreads), wrap.clientHeight);
     if (w <= 0) return;
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(contentH * dpr);
+    const pixelWidth = Math.floor(w * dpr);
+    const pixelHeight = Math.floor(contentH * dpr);
+    if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+    if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
     canvas.style.width = `${w}px`;
     canvas.style.height = `${contentH}px`;
     const ctx = canvas.getContext('2d');
@@ -224,7 +258,7 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
       ctx.restore();
 
       ctx.font = '10px Inter, Segoe UI, system-ui, sans-serif';
-      for (const bar of th.bars) {
+      for (const bar of barsInWindow(th, cur)) {
         if (bar.depth > th.maxDepth) continue;
         const bounds = projectSample(bar, plotW, cur);
         if (!bounds) continue;
@@ -302,12 +336,15 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
 
   useEffect(() => {
     draw();
+  }, [draw, win]);
+
+  useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
     const ro = new ResizeObserver(draw);
     ro.observe(wrap);
     return () => ro.disconnect();
-  }, [draw, win]);
+  }, [draw]);
 
   const plotW = () => {
     const wrap = wrapRef.current;
@@ -403,13 +440,35 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
   };
 
   const visibleEnd = win.startMs + win.spanMs;
+  const visibleFrames = useMemo(() => {
+    if (!onVisibleRange || selectionIndex < 0 || loadingContext) return null;
+    if (!context.length) return { start: selectionIndex, end: selectionIndex };
+    const center = context.findIndex((row) => row.selected);
+    if (center < 0) return null;
+    let first = -1;
+    let last = -1;
+    for (let position = 0; position < context.length; position++) {
+      const row = context[position];
+      if (row.offsetMs >= visibleEnd) break;
+      if (row.offsetMs + row.durationMs <= win.startMs) continue;
+      if (first < 0) first = position;
+      last = position;
+    }
+    return first < 0 ? null : { start: selectionIndex + first - center, end: selectionIndex + last - center };
+  }, [context, selectionIndex, loadingContext, win.startMs, visibleEnd, onVisibleRange]);
+  const rangeStart = visibleFrames?.start;
+  const rangeEnd = visibleFrames?.end;
+  useEffect(() => {
+    onVisibleRange?.(rangeStart === undefined || rangeEnd === undefined ? null : { start: rangeStart, end: rangeEnd });
+  }, [rangeStart, rangeEnd, onVisibleRange]);
+  useEffect(() => () => onVisibleRange?.(null), [onVisibleRange]);
   const maxTime = layout.startMs + fitWindow(layout.totalMs, layout.startMs).spanMs;
 
   return (
     <div className="cpu-timeline" data-testid="cpu-timeline">
       <div className="sr-only" data-testid="cpu-timeline-threads">
         {layout.threads.map((th) => (
-          <span key={th.bars[0].id}>{th.name}</span>
+          <span key={th.id}>{th.name}</span>
         ))}
       </div>
       <div
@@ -436,6 +495,7 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
           if (drag.current) return;
           if (e.button !== 0 && e.button !== 1 && !(e.altKey && e.button === 2)) return;
           if (e.button === 1) {
+            requestedEdges.current.clear();
             e.preventDefault();
             setPanning(true);
             setPointer(null);
@@ -472,12 +532,15 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
           }
           if (d.mode !== 'pan') return;
           e.currentTarget.scrollTop = d.scrollTop - dy;
-          setWin(panWindow(d.startWin, layout.totalMs, panDeltaFromPixels(dx, plotW(), d.startWin), layout.startMs));
+          const target = { ...d.startWin, startMs: d.startWin.startMs + panDeltaFromPixels(dx, plotW(), d.startWin) };
+          if (pendingNeighbor.current || loadingContext) desiredPan.current = target;
+          else pagePan(target);
         }}
         onPointerUp={(e) => {
           const d = drag.current;
           if (!d || d.pointerId !== e.pointerId) return;
           drag.current = null;
+          desiredPan.current = null;
           setPanning(false);
           try {
             e.currentTarget.releasePointerCapture?.(e.pointerId);
@@ -497,12 +560,14 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
           setSelected(hit?.id ?? '');
         }}
         onPointerCancel={() => {
+          desiredPan.current = null;
           drag.current = null;
           setPanning(false);
           setPointer(null);
         }}
         onLostPointerCapture={(event) => {
           if (drag.current?.pointerId !== event.pointerId) return;
+          desiredPan.current = null;
           drag.current = null;
           setPanning(false);
         }}
@@ -622,15 +687,18 @@ export function CpuTimeline({ frame, hierarchy, threadSamples, context = EMPTY_C
         <span className="dim">{layout.threads.length > 0
           ? '左键选中采样或切换灰色帧 · 中键拖拽平移 · 滚轮缩放 · 双击放大 · A 适应整帧 · F 聚焦采样'
           : '此帧暂无带时间戳的 CPU 采样'}</span>
-        <select className="cpu-timeline-label-style" aria-label="采样条样式" value={labelStyle}
-          onChange={(event) => {
-            const next = event.target.value === 'unity' ? 'unity' : 'split';
-            setLabelStyle(next);
-            try { localStorage.setItem(labelStyleKey, next); } catch { return; }
-          }}>
-          <option value="split">耗时分列</option>
-          <option value="unity">Unity 合并显示</option>
-        </select>
+        <label className="cpu-timeline-style-control">
+          文字样式
+          <select className="cpu-timeline-label-style" value={labelStyle}
+            onChange={(event) => {
+              const next = event.target.value === 'unity' ? 'unity' : 'split';
+              setLabelStyle(next);
+              try { localStorage.setItem(labelStyleKey, next); } catch { return; }
+            }}>
+            <option value="split">耗时分列</option>
+            <option value="unity">Unity 合并显示</option>
+          </select>
+        </label>
         <button
           type="button"
           className="btn ghost cpu-timeline-fit"

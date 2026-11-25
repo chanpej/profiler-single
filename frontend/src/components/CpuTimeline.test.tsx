@@ -94,7 +94,8 @@ describe('CpuTimeline', () => {
       expect(fillText).toHaveBeenCalledWith('10.00ms', expect.any(Number), rootCenter);
       expect(fillText).toHaveBeenCalledWith('3.00ms', expect.any(Number), childCenter);
       expect(fillText).not.toHaveBeenCalledWith('BehaviourUpdate', expect.any(Number), childCenter);
-      const select = screen.getByRole('combobox', { name: '采样条样式' });
+      const select = screen.getByLabelText('文字样式', { exact: false });
+      expect(select.closest('label')?.nextElementSibling).toBe(screen.getByRole('button', { name: '适应窗口' }));
       expect(select).toHaveValue('split');
       fireEvent.change(select, { target: { value: 'unity' } });
       expect(childAlpha.length).toBeGreaterThan(0);
@@ -113,7 +114,7 @@ describe('CpuTimeline', () => {
       expect(alphaAtWidth(900)).toBe(1);
       unmount();
       render(<CpuTimeline frame={frame} hierarchy={tree} />);
-      expect(screen.getByRole('combobox', { name: '采样条样式' })).toHaveValue('unity');
+      expect(screen.getByLabelText('文字样式', { exact: false })).toHaveValue('unity');
     } finally {
       localStorage.removeItem('upa.cpuTimeline.labelStyle');
       getContext.mockRestore();
@@ -151,6 +152,41 @@ describe('CpuTimeline', () => {
     expect(window).toHaveAttribute('data-span', '10');
     fireEvent.keyDown(plot, { key: 'a' });
     expect(window).toHaveAttribute('data-start', '0');
+  });
+
+  it('extends the viewport without selecting frames and ignores late pages after release', async () => {
+    const seek = vi.fn();
+    const rows = (center: number) => Array.from({ length: 7 }, (_, position) => ({
+      frameIndex: center + position - 3, offsetMs: (position - 3) * 10, durationMs: 10,
+      selected: position === 3, threads: [],
+    }));
+    let finish!: () => void;
+    const load = vi.fn(async (index: number, id: number) => {
+      expect(index).toBe(id);
+      if (id === 14) await new Promise<void>((resolve) => { finish = resolve; });
+      return rows(id);
+    });
+    const { act, waitFor } = await import('@testing-library/react');
+    const { ProfilerDetail } = await import('./ProfilerDetail');
+    render(<ProfilerDetail moduleId="cpu" frame={{ ...frame, frameIndex: 20 }} cpuTab="timeline"
+      totalFrames={100} timelineSelection={20} onTimelineSeek={seek} getTimeline={load} />);
+    const plot = screen.getByTestId('cpu-timeline-plot');
+    const view = screen.getByTestId('cpu-timeline-window');
+    await waitFor(() => expect(view).toHaveAttribute('data-span', '10'));
+    mockPlot(plot, THREAD_LABEL_W + 100);
+    const pointer = { pointerId: 1, button: 1, clientY: 40 };
+    fireEvent.pointerDown(plot, { ...pointer, clientX: 200 });
+    fireEvent.pointerMove(plot, { ...pointer, clientX: -450 });
+    await waitFor(() => expect(view).toHaveAttribute('data-start', '65'));
+    fireEvent.pointerMove(plot, { ...pointer, clientX: 900 });
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith(14, 14));
+    fireEvent.pointerMove(plot, { ...pointer, clientX: 150 });
+    fireEvent.pointerUp(plot, { ...pointer, clientX: 150 });
+    await act(async () => finish());
+    expect(view).toHaveAttribute('data-start', '5');
+    expect(view).toHaveAttribute('data-span', '10');
+    expect(load.mock.calls.map(([index]) => index)).toEqual([20, 23, 26, 17, 14]);
+    expect(seek).not.toHaveBeenCalled();
   });
 
   it('focuses the selected sample with F and fits the frame with A', () => {
