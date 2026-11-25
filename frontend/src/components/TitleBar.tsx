@@ -1,5 +1,5 @@
 import { Minus, Square, Copy, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createWindowControls, type WindowControls } from '../lib/window';
 
 interface Props {
@@ -13,12 +13,17 @@ export function TitleBar({ title = 'unityperf', subtitle = '', controls }: Props
   const win = controls ?? defaultControls;
   const [maximised, setMaximised] = useState(false);
 
+  const revision = useRef(0);
   const refresh = useCallback(() => {
-    win.isMaximised().then(setMaximised).catch(() => setMaximised(false));
+    const request = ++revision.current;
+    win.isMaximised().then(value => { if (request === revision.current) setMaximised(value); }).catch(() => {});
   }, [win]);
 
   useEffect(() => {
     refresh();
+    window.addEventListener('resize', refresh);
+    window.addEventListener('focus', refresh);
+    return () => { ++revision.current; window.removeEventListener('resize', refresh); window.removeEventListener('focus', refresh); };
   }, [refresh]);
 
   return (

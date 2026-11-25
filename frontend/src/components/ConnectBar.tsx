@@ -3,6 +3,7 @@ import { Trash2, Unplug, Usb } from 'lucide-react';
 import type { Status } from '../types';
 
 interface Props {
+  phones?: { ip: string; endpoint: string; error: string; devices: { serial: string; model: string; brand: string; android: string; sdk: string; abi: string; screen: string; memory: string; ip: string; endpoint: string }[] };
   status: Status;
   busy: boolean;
   packageId: string;
@@ -21,7 +22,7 @@ export function ConnectBar({
   status,
   busy,
   packageId,
-  onPackageIdChange,
+  phones, onPackageIdChange,
   onDisconnect,
   onUSB,
   onDirect,
@@ -30,7 +31,9 @@ export function ConnectBar({
   onClear,
   onUnityLogs,
 }: Props) {
-  const [deviceIP, setDeviceIP] = useState('');
+  const [showPhones, setShowPhones] = useState(false);
+  const [manualIP, setDeviceIP] = useState<string>();
+  const deviceIP = manualIP ?? phones?.ip ?? '';
   const unityLabel = status.device.unityVersion === '' ? 'Unity 未知' : `Unity ${status.device.unityVersion}`;
   const auto = status.transport === 'autoconnect';
   const live = status.connected || !!status.reconnecting;
@@ -124,6 +127,16 @@ export function ConnectBar({
           <button type="submit" className="btn" disabled={busy || !deviceIP.trim()}>IP 直连</button>
         </form>
       )}
+      <details className="phone-details" onToggle={event => setShowPhones(event.currentTarget.open)}><summary>手机信息</summary>{showPhones && <div className="phone-panel">
+        {status.connected && <p>当前 Player · {status.device.deviceName} {status.device.deviceModel} {phones?.ip} · {status.device.os} · Unity {status.device.unityVersion || '未知'} · 应用 {status.device.appVersion || '未知'}</p>}
+        {phones?.devices.map(phone => <section key={phone.serial}>
+          <strong>{phone.brand} {phone.model || 'Android 手机'}</strong>
+          <div>ADB 设备　{phone.serial}</div><div>Wi-Fi IP　{phone.ip || '未知'}</div>
+          <div>无线 ADB 地址　{phone.endpoint || '未知'}</div><div>Android　{phone.android || '未知'}（API {phone.sdk || '未知'}）</div>
+          <div>CPU 架构　{phone.abi || '未知'}</div><div>屏幕　{phone.screen || '未知'}</div><div>总内存　{phone.memory || '未知'}</div>
+        </section>)}
+        {!phones?.devices.length && <p>{phones?.error || '暂无在线 ADB 手机'}</p>}
+      </div>}</details>
       <div className="connect-bar-spacer" />
       {onUnityLogs && <button type="button" className="btn ghost" onClick={onUnityLogs}>Unity 日志</button>}
       <span className="frame-counter mono" title="累计采集帧数">

@@ -3,7 +3,7 @@ export interface WindowAPI {
   Minimise(): Promise<void>;
   ToggleMaximise(): Promise<void>;
   Close(): Promise<void>;
-  IsMaximised(): Promise<boolean>;
+  IsMaximised(): Promise<boolean | string>;
 }
 
 export interface WindowControls {
@@ -29,6 +29,6 @@ export function createWindowControls(win?: WindowAPI): WindowControls {
     minimise: () => win.Minimise(),
     toggleMaximise: () => win.ToggleMaximise(),
     close: () => win.Close(),
-    isMaximised: () => win.IsMaximised(),
+    isMaximised: async () => { const value = await win.IsMaximised(); return value === true || value === 'true'; },
   };
 }

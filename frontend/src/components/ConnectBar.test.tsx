@@ -185,3 +185,14 @@ describe('ConnectBar', () => {
     expect(onDisconnect).toHaveBeenCalled();
   });
 });
+
+it('uses the detected phone IP and accepts a manual address', async () => {
+  const onDirect = vi.fn();
+  renderBar({ onDirect, phones: { ip: '10.1.2.3', endpoint: '10.1.2.3:5555', devices: [], error: '' } });
+  const input = screen.getByLabelText('手机 IP');
+  expect(input).toHaveValue('10.1.2.3');
+  await userEvent.clear(input);
+  await userEvent.type(input, '10.1.2.7');
+  await userEvent.click(screen.getByRole('button', { name: 'IP 直连' }));
+  expect(onDirect).toHaveBeenCalledWith('10.1.2.7');
+});

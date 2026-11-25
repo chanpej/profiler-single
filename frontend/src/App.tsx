@@ -48,6 +48,18 @@ function App() {
   const [status, setStatus] = useState<Status>(emptyStatus);
   const [, setStats] = useState<Stats | null>(null);
   const [busy, setBusy] = useState(false);
+  const [phones, setPhones] = useState<Awaited<ReturnType<typeof api.connectedPhones>>>();
+  useEffect(() => {
+    let stopped = false;
+    let timer: number;
+    const load = async () => {
+      try { const result = await api.connectedPhones(); if (!stopped) setPhones(result); }
+      catch { if (!stopped) setPhones(undefined); }
+      if (!stopped) timer = window.setTimeout(load, 8000);
+    };
+    void load();
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [status.connected, status.transport]);
   const [packageId, setPackageId] = useState(loadPackageId);
   const [autoconnectAddresses, setAutoconnectAddresses] = useState<string[]>([]);
   const [error, setError] = useState('');
@@ -204,7 +216,7 @@ function App() {
       />
       <div className="app-body">
         <div className="app-main">
-          <ConnectBar
+          <ConnectBar phones={phones}
             status={status}
             busy={busy}
             packageId={packageId}
@@ -226,7 +238,7 @@ function App() {
             getTimeline={getTimeline}
             getHeavyProfile={api.frameHeavyProfile}
             getScreenshots={api.screenFilmstrip}
-            setScreenCapture={api.setScreenCapture}
+            wirelessAddress={phones?.endpoint} setScreenCapture={api.setScreenCapture} startWireless={api.startWirelessScreenCapture} enableWireless={api.enableWirelessScreenADB}
             recording={recording}
             connected={status.connected}
             deepProfiling={status.deepProfiling === true}

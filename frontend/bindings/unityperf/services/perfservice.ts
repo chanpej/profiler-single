@@ -55,6 +55,10 @@ export function ConnectUSB(serial: string, packageID: string): $CancellablePromi
     return $Call.ByID(3767713096, serial, packageID);
 }
 
+export function ConnectedPhones(): $CancellablePromise<$models.PhoneInventory> {
+    return $Call.ByID(3858909806);
+}
+
 /**
  * Disconnect 断开 Profiler 连接（并拆除 adb forward）。已采集数据保留。
  */
@@ -67,6 +71,13 @@ export function Disconnect(): $CancellablePromise<void> {
  */
 export function DiscoverPlayers(): $CancellablePromise<unityprofiler$0.PlayerInfo[] | null> {
     return $Call.ByID(3641702931);
+}
+
+/**
+ * EnableWirelessScreenADB prepares a single USB-connected Android device before profiling.
+ */
+export function EnableWirelessScreenADB(): $CancellablePromise<string> {
+    return $Call.ByID(900294988);
 }
 
 /**
@@ -158,6 +169,10 @@ export function SetScreenCapture(enabled: boolean): $CancellablePromise<void> {
 
 export function StartAutoconnect(port: number): $CancellablePromise<void> {
     return $Call.ByID(2394851283, port);
+}
+
+export function StartWirelessScreenCapture(address: string): $CancellablePromise<void> {
+    return $Call.ByID(222530214, address);
 }
 
 export function Stats(): $CancellablePromise<collector$0.Stats> {

@@ -35,7 +35,27 @@ var (
 
 // File is a complete native capture. Raw contains Player-to-Editor
 // MsgIDProfilerData bodies in receive order, including the PD3U stream header.
+type PhoneInfo struct {
+	Serial   string `json:"serial"`
+	Model    string `json:"model"`
+	Brand    string `json:"brand"`
+	Android  string `json:"android"`
+	SDK      string `json:"sdk"`
+	ABI      string `json:"abi"`
+	Screen   string `json:"screen"`
+	Memory   string `json:"memory"`
+	IP       string `json:"ip"`
+	Endpoint string `json:"endpoint"`
+}
+
+// archiveMetadata keeps handshake keys at the root for existing UPAC v2 readers.
+type archiveMetadata struct {
+	protocol.Handshake
+	Phone *PhoneInfo `json:"phone,omitempty"`
+}
+
 type File struct {
+	Phone     *PhoneInfo
 	Handshake protocol.Handshake
 	Raw       [][]byte
 	Screen    screenshots.Track
@@ -111,7 +131,7 @@ func encode(w io.Writer, file File, progress func(done, total int)) error {
 	if len(file.Raw) > maxChunks {
 		return fmt.Errorf("原始 PD3U 分块数 %d 超过上限 %d", len(file.Raw), maxChunks)
 	}
-	metadata, err := json.Marshal(file.Handshake)
+	metadata, err := json.Marshal(archiveMetadata{Handshake: file.Handshake, Phone: file.Phone})
 	if err != nil {
 		return fmt.Errorf("编码握手信息失败：%w", err)
 	}
@@ -202,9 +222,11 @@ func Decode(r io.Reader) (File, error) {
 		return File{}, fmt.Errorf("读取握手信息失败：%w", err)
 	}
 	var out File
-	if err := json.Unmarshal(metadata, &out.Handshake); err != nil {
+	var meta archiveMetadata
+	if err := json.Unmarshal(metadata, &meta); err != nil {
 		return File{}, fmt.Errorf("握手信息损坏：%w", err)
 	}
+	out.Handshake, out.Phone = meta.Handshake, meta.Phone
 	out.Raw = make([][]byte, h.ChunkCount)
 	totalRawBytes := 0
 	for i := range out.Raw {

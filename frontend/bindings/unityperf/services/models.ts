@@ -4,6 +4,9 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as upac$0 from "../internal/upac/models.js";
 
 export interface ExportProgressEvent {
     "path": string;
@@ -42,6 +45,15 @@ export interface ImportProgressEvent {
     "total": number;
     "percent": number;
     "fileName": string;
+}
+
+export type PhoneInfo = upac$0.PhoneInfo;
+
+export interface PhoneInventory {
+    "devices": PhoneInfo[] | null;
+    "ip": string;
+    "endpoint": string;
+    "error": string;
 }
 
 export interface PlayerLog {

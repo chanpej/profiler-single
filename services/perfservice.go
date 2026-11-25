@@ -97,23 +97,25 @@ type Status struct {
 
 // PerfService 是性能采集与分析的门面，供前端调用。
 type PerfService struct {
-	connectionMu sync.Mutex
-	mu           sync.Mutex
-	client       *device.Client
-	session      *collector.Session
-	transport    string
-	tunnel       *adbforward.Tunnel
-	adbRun       adbforward.Runner
-	emit         func(name string, data any)
-	logger       *log.Logger
-	logFile      *os.File
-	recording    bool
-	captureRaw   bool
-	sourceFile   string
-	loadedHS     protocol.Handshake
-	deep         bool
-	callStacks   bool
-	lastErr      string
+	connectionMu      sync.Mutex
+	mu                sync.Mutex
+	client            *device.Client
+	session           *collector.Session
+	transport         string
+	tunnel            *adbforward.Tunnel
+	adbRun            adbforward.Runner
+	emit              func(name string, data any)
+	logger            *log.Logger
+	logFile           *os.File
+	recording         bool
+	captureRaw        bool
+	sourceFile        string
+	loadedHS          protocol.Handshake
+	capturePhone      *upac.PhoneInfo
+	captureGeneration uint64
+	deep              bool
+	callStacks        bool
+	lastErr           string
 
 	// wantLive 表示用户点了连接且尚未点断开。对端 EOF 后仍为 true，会自动重连。
 	wantLive        bool
@@ -356,8 +358,10 @@ func (p *PerfService) dialUSB(serial, packageID string, fresh bool) (protocol.Ha
 		p.usbSerial = dev.Serial
 		p.usbPackage = packageID
 		p.liveHS = hs
+		p.loadedHS = hs
 		p.startUSBLogsLocked(run, dev.Serial, packageID)
 		p.mu.Unlock()
+		p.ConnectedPhones()
 		if old != nil && (old.LocalPort != tun.LocalPort || old.Remote != tun.Remote) {
 			_ = adbforward.Remove(run, *old)
 		}
@@ -377,6 +381,8 @@ func (p *PerfService) connectTCP(host string, port int, transport string, fresh 
 	}
 	if fresh {
 		p.session.ClearAll()
+		p.captureGeneration++
+		p.capturePhone = nil
 		p.resetScreenLocked(true)
 		p.sourceFile = ""
 		p.loadedHS = protocol.Handshake{}
@@ -419,10 +425,16 @@ func (p *PerfService) connectTCP(host string, port int, transport string, fresh 
 	p.livePort = port
 	p.liveKind = transport
 	p.liveHS = hs
+	p.loadedHS = hs
 	p.mu.Unlock()
 	if deep || stacks {
 		if err := p.client.SetProfilerOptions(deep, stacks); err != nil {
 			p.logf("下发 Deep Profile/Call Stacks 失败: %v", err)
+		}
+	}
+	if transport == "tcp" {
+		if _, err := wirelessEndpoint(host); err == nil {
+			p.ConnectedPhones()
 		}
 	}
 	p.notifyUI()
@@ -550,6 +562,8 @@ func (p *PerfService) Clear() {
 		p.session.ClearRecordedData()
 	} else {
 		p.session.ClearAll()
+		p.captureGeneration++
+		p.capturePhone = nil
 	}
 	p.resetScreenLocked(false)
 	if connected || p.screen.epoch > 0 {
@@ -699,6 +713,10 @@ func (p *PerfService) ExportCapture(path string) error {
 	if hs == (protocol.Handshake{}) {
 		hs = p.liveHS
 	}
+	if p.sourceFile != "" || hs == (protocol.Handshake{}) {
+		hs = p.loadedHS
+	}
+	phone := p.capturePhone
 	screen := p.screenTrackLocked()
 	emit := p.emit
 	p.mu.Unlock()
@@ -707,7 +725,7 @@ func (p *PerfService) ExportCapture(path string) error {
 	}
 	lastUpdate := time.Time{}
 	lastPercent := 0
-	archive := upac.File{Handshake: hs, Raw: raw, Screen: screen}
+	archive := upac.File{Phone: phone, Handshake: hs, Raw: raw, Screen: screen}
 	if err := upac.SaveFileWithProgress(path, archive, func(done, total int) {
 		percent := int(int64(done) * 99 / int64(total))
 		if emit != nil && percent > lastPercent && (done == total || time.Since(lastUpdate) >= importProgressMinInterval) {
@@ -764,7 +782,7 @@ func (p *PerfService) importUnityData(path string) (int, error) {
 	}
 	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
 	p.session.ReplaceFrames(file.Frames)
-	return p.finishImport(path, file.Handshake, screenshots.Track{})
+	return p.finishImport(path, file.Handshake, screenshots.Track{}, nil)
 }
 
 func (p *PerfService) importUPAC(path string) (int, error) {
@@ -775,7 +793,7 @@ func (p *PerfService) importUPAC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPAC 存档：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, file.Screen, &last)
+	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, file.Screen, file.Phone, &last)
 }
 
 // importUPPC loads a transparent Editor↔Player proxy capture. It is a lossless
@@ -788,10 +806,10 @@ func (p *PerfService) importUPPC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPPC 原始抓包：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), screenshots.Track{}, &last)
+	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), screenshots.Track{}, nil, &last)
 }
 
-func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, screen screenshots.Track, last *time.Time) (int, error) {
+func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo, last *time.Time) (int, error) {
 	frames, err := unityprofiler.ReplayFramesWithProgress(raw, func(done, total int) {
 		p.emitImportProgress(fileName, "parse", done, total, false, last)
 	})
@@ -804,7 +822,7 @@ func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handsha
 	p.emitImportProgress(fileName, "parse", len(raw), len(raw), true, last)
 	p.session.ReplaceFrames(frames)
 	p.session.SetRaw(raw)
-	return p.finishImport(path, handshake, screen)
+	return p.finishImport(path, handshake, screen, phone)
 }
 
 func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
@@ -820,13 +838,15 @@ func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
 	return protocol.Handshake{}
 }
 
-func (p *PerfService) finishImport(path string, handshake protocol.Handshake, screen screenshots.Track) (int, error) {
+func (p *PerfService) finishImport(path string, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo) (int, error) {
 	connected := p.client.Connected()
 	p.mu.Lock()
 	p.resetScreenLocked(true)
 	p.screen.track = screen
 	p.sourceFile = path
 	p.loadedHS = handshake
+	p.captureGeneration++
+	p.capturePhone = phone
 	p.captureRaw = false
 	if connected {
 		p.recording = false

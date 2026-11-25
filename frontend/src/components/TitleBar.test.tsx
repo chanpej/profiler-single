@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TitleBar } from './TitleBar';
 import type { WindowControls } from '../lib/window';
@@ -53,4 +53,12 @@ describe('TitleBar', () => {
     render(<TitleBar controls={win} />);
     expect(await screen.findByRole('button', { name: '还原' })).toBeInTheDocument();
   });
+});
+
+it('refreshes the icon after Windows restores the window externally', async () => {
+  const state = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+  render(<TitleBar controls={mockWin({ isMaximised: state })} />);
+  await screen.findByRole('button', { name: '还原' });
+  fireEvent(window, new Event('resize'));
+  expect(await screen.findByRole('button', { name: '最大化' })).toBeInTheDocument();
 });

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 
 	"unityperf/internal/protocol"
@@ -20,6 +21,7 @@ type frameRow struct {
 	FrameIndex    string                    `json:"frameIndex"`
 	Metrics       protocol.FrameData        `json:"metrics"`
 	Threads       []protocol.TimelineThread `json:"threads,omitempty"`
+	ScreenJPEG    []byte                    `json:"screenJpegBase64,omitempty"`
 	ScreenDeltaMs *int64                    `json:"screenDeltaMs,omitempty"`
 }
 
@@ -28,13 +30,26 @@ func main() {
 	start := flag.Int("start", 0, "first zero-based decoded position")
 	count := flag.Int("count", 0, "number of positions; 0 means all remaining")
 	detail := flag.Bool("detail", false, "include thread sample trees")
+	stats := flag.Bool("stats", false, "summarize frame times per clock epoch")
+	fps := flag.Float64("fps", 0, "target FPS for -stats; omit for no budget")
+	image := flag.Bool("image", false, "include matched screenshot JPEG in detail rows")
+	metadataOnly := flag.Bool("metadata", false, "print capture handshake and recorded phone information")
 	flag.Parse()
+	if math.IsNaN(*fps) || math.IsInf(*fps, 0) || *fps < 0 || (*fps != 0 && !*stats) || (*stats && (*detail || *image)) {
+		log.Fatal("use -fps with -stats and a finite positive target; -detail and -image are extraction options")
+	}
 	if *input == "" {
 		log.Fatal("-file is required")
 	}
 	capture, err := upac.LoadFile(*input)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *metadataOnly {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"handshake": capture.Handshake, "phone": capture.Phone}); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	frames, err := unityprofiler.ReplayFrames(capture.Raw)
 	if err != nil {
@@ -48,8 +63,14 @@ func main() {
 		end = *start + *count
 	}
 	encoder := json.NewEncoder(os.Stdout)
+	if *stats {
+		if err := encoder.Encode(frameStats(frames[*start:end], *start, *fps)); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	metadata := map[string]any{
-		"kind": "capture", "handshake": capture.Handshake, "rawChunks": len(capture.Raw),
+		"kind": "capture", "phone": capture.Phone, "handshake": capture.Handshake, "rawChunks": len(capture.Raw),
 		"decodedFrames": len(frames), "screenShots": len(capture.Screen.Shots),
 		"start": *start, "endExclusive": end,
 	}
@@ -63,11 +84,14 @@ func main() {
 			PlayerStartNS: fmt.Sprint(frame.PlayerStartNS), PlayerEndNS: fmt.Sprint(frame.PlayerEndNS),
 			FrameIndex: fmt.Sprint(frame.Summary.FrameIndex),
 		}
-		if *detail {
+		if *detail || *image {
 			row.Threads = frame.TimelineThreads()
 			if frame.PlayerEndNS > frame.PlayerStartNS {
-				if _, delta, ok := capture.Screen.Nearest(frame.ClockEpoch, frame.PlayerEndNS); ok {
+				if shot, delta, ok := capture.Screen.Nearest(frame.ClockEpoch, frame.PlayerEndNS); ok {
 					row.ScreenDeltaMs = &delta
+					if *image {
+						row.ScreenJPEG = shot.JPEG
+					}
 				}
 			}
 		}

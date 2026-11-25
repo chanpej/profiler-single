@@ -20,6 +20,9 @@ function normalizeHeavySamples(samples?: (WireHeavySample | null)[] | null): Hea
 
 export const api = {
   screenFilmstrip: (offset: number, count: number, selected: number) => screenService.ScreenFilmstrip(offset, count, selected),
+  connectedPhones: async () => { const result = await PerfService.ConnectedPhones(); return { ...result, devices: result.devices ?? [] }; },
+  startWirelessScreenCapture: (address: string) => PerfService.StartWirelessScreenCapture(address),
+  enableWirelessScreenADB: () => PerfService.EnableWirelessScreenADB(),
   setScreenCapture: (enabled: boolean) => screenService.SetScreenCapture(enabled),
   connectDirect: (host: string): Promise<Handshake> => PerfService.Connect(host, 0),
   connectUSB: (serial = '', packageId = ''): Promise<Handshake> => PerfService.ConnectUSB(serial, packageId),

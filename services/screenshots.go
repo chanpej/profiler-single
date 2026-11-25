@@ -40,6 +40,18 @@ type ScreenFilmstrip struct {
 }
 
 func (p *PerfService) SetScreenCapture(enabled bool) error {
+	return p.setScreenCapture(enabled, "")
+}
+
+func (p *PerfService) StartWirelessScreenCapture(address string) error {
+	endpoint, err := wirelessEndpoint(address)
+	if err != nil {
+		return err
+	}
+	return p.setScreenCapture(true, endpoint)
+}
+
+func (p *PerfService) setScreenCapture(enabled bool, endpoint string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !enabled {
@@ -56,19 +68,25 @@ func (p *PerfService) SetScreenCapture(enabled bool) error {
 	p.screen.cancel = cancel
 	p.screen.lastError = ""
 	p.screen.runID++
-	go p.captureScreen(ctx, p.screen.runID, p.adbRun, p.usbSerial)
+	go p.captureScreen(ctx, p.screen.runID, p.adbRun, p.usbSerial, endpoint)
 	return nil
 }
 
-func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbforward.Runner, serial string) {
-	if serial == "" {
+func (p *PerfService) captureScreen(ctx context.Context, runID uint64, run adbforward.Runner, serial, endpoint string) {
+	if endpoint != "" {
+		if err := connectScreenDevice(ctx, run, endpoint); err != nil {
+			p.screenCaptureError(runID, err)
+			return
+		}
+		serial = endpoint
+	} else if serial == "" {
 		devices, err := adbforward.ListDevices(run)
 		if err != nil {
 			p.screenCaptureError(runID, err)
 			return
 		}
 		if len(devices) != 1 {
-			p.screenCaptureError(runID, errors.New("小游戏截图需要且只允许一台在线的 ADB 手机"))
+			p.screenCaptureError(runID, errors.New("自动选择截图设备需要一台在线 ADB 手机；也可在无线截图中指定地址"))
 			return
 		}
 		serial = devices[0].Serial

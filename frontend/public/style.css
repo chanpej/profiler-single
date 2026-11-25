@@ -1367,3 +1367,8 @@ code {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #2f3747; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+.phone-details { position:relative; flex-shrink:0; }
+.phone-details summary { cursor:pointer; }
+.phone-panel { position:absolute; z-index:90; right:0; top:100%; width:320px; max-height:55vh; overflow:auto; padding:12px; background:var(--bg-panel); border:1px solid var(--border); user-select:text; }
+.phone-panel section + section { margin-top:10px; border-top:1px solid var(--border); }

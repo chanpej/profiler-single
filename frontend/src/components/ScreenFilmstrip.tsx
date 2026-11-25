@@ -20,6 +20,9 @@ export interface ScreenFilmstripData {
 
 interface Props {
   fetchStrip: (offset: number, count: number, selected: number) => Promise<ScreenFilmstripData>;
+  wirelessAddress?: string;
+  startWireless?: (address: string) => Promise<void>;
+  enableWireless?: () => Promise<string>;
   setCapture: (enabled: boolean) => Promise<void>;
   connected?: boolean;
   start: number;
@@ -32,10 +35,13 @@ const empty: ScreenFilmstripData = { enabled: false, available: false, error: ''
 const imageSource = (shot: Thumbnail) => `data:image/jpeg;base64,${shot.image}`;
 const timing = (shot: Thumbnail) => `估算偏移 ${shot.deltaMs >= 0 ? '+' : ''}${shot.deltaMs} ms · ${shot.streamed ? '连续采集' : `截图耗时 ${shot.captureMs} ms`}`;
 
-export function ScreenFilmstrip({ fetchStrip, setCapture, connected, start, count, selected, onSelect }: Props) {
+export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, startWireless, enableWireless, connected, start, count, selected, onSelect }: Props) {
   const [strip, setStrip] = useState(empty);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [wireless, setWireless] = useState(false);
+  const [manualAddress, setAddress] = useState<string>();
+  const address = manualAddress ?? wirelessAddress ?? '';
   const [preview, setPreview] = useState(false);
   const [error, setError] = useState('');
   const viewport = useRef({ start, count, selected });
@@ -66,7 +72,8 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, connected, start, coun
     setBusy(true);
     setError('');
     try {
-      await setCapture(!strip.enabled);
+      if (!strip.enabled && wireless && startWireless) await startWireless(address.trim());
+      else await setCapture(!strip.enabled);
       if (!strip.enabled) setOpen(true);
     } catch (reason) {
       setError(String(reason));
@@ -81,7 +88,16 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, connected, start, coun
     <section className="screen-filmstrip" aria-label="画面轨道">
       <div className="screen-filmstrip-toolbar">
         <button type="button" className="btn ghost" onClick={() => setOpen(!open)} aria-expanded={open}>画面轨道</button>
-        <button type="button" className="btn ghost" onClick={toggle} disabled={busy || (!connected && !strip.enabled)} aria-pressed={strip.enabled}>
+        {startWireless && <label><input type="checkbox" checked={wireless} disabled={busy || strip.enabled}
+          onChange={(event) => setWireless(event.target.checked)} />无线截图</label>}
+        {wireless && <input className="input host" aria-label="无线 ADB 地址" placeholder="手机 IP:连接端口" value={address}
+          disabled={busy || strip.enabled} onChange={(event) => setAddress(event.target.value)} />}
+        {wireless && enableWireless && !connected && <button type="button" className="btn ghost" disabled={busy}
+          title="在已授权的 USB 手机上开启 ADB TCP 5555 并填入 Wi-Fi 地址" onClick={async () => {
+            setBusy(true); setError('');
+            try { setAddress(await enableWireless()); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+          }}>通过 USB 开启无线 ADB</button>}
+        <button type="button" className="btn ghost" onClick={toggle} disabled={busy || (!strip.enabled && (!connected || (wireless && !address.trim())))} aria-pressed={strip.enabled}>
           <Camera size={14} aria-hidden /> {strip.enabled ? '停止截图' : '采集截图'}
         </button>
         {open && picked && <button type="button" className="btn ghost" onClick={() => setPreview(!preview)}>{preview ? '关闭预览' : '预览选中帧'}</button>}

@@ -84,6 +84,8 @@ func (p *PerfService) startAutoconnect(listener net.Listener) error {
 		return errors.New("已有连接或正在等待连接，请先断开")
 	}
 	p.session.ClearAll()
+	p.captureGeneration++
+	p.capturePhone = nil
 	p.resetScreenLocked(true)
 	p.transport = autoConnectTransport
 	p.sourceFile = ""
@@ -109,12 +111,15 @@ func (p *PerfService) handleAutoconnect(conn net.Conn) {
 		current := p.incoming != nil
 		if current {
 			p.liveHS = hs
+			p.loadedHS = hs
+			p.liveHost, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
 			p.lastErr = ""
 			p.reconnecting = false
 		}
 		deep, stacks := p.deep, p.callStacks
 		p.mu.Unlock()
 		if current {
+			p.ConnectedPhones()
 			if deep || stacks {
 				_ = p.client.SetProfilerOptions(deep, stacks)
 			}

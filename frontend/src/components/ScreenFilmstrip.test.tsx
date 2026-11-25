@@ -19,3 +19,18 @@ it('uses the viewport to fetch screenshots and selects the associated frame', as
   expect(screen.getByAltText('选中帧附近的手机画面')).toHaveAttribute('src', 'data:image/jpeg;base64,aW1hZ2U=');
   expect(screen.getByText(/估算偏移 \+42 ms/)).toBeInTheDocument();
 });
+
+it('prepares the wireless address before connecting and starts capture on that endpoint', async () => {
+  const startWireless = vi.fn(async () => {});
+  const enableWireless = vi.fn(async () => '192.168.0.7:5555');
+  const props = { startWireless, enableWireless, setCapture: vi.fn(), start: 0, count: 0, selected: -1,
+    onSelect: vi.fn(), fetchStrip: async () => ({ enabled: false, available: false, error: '', thumbnails: [], selected: null }) };
+  const view = render(<ScreenFilmstrip {...props} connected={false} />);
+  fireEvent.click(screen.getByLabelText('无线截图'));
+  fireEvent.click(screen.getByRole('button', { name: '通过 USB 开启无线 ADB' }));
+  await waitFor(() => expect(screen.getByLabelText('无线 ADB 地址')).toHaveValue('192.168.0.7:5555'));
+  view.rerender(<ScreenFilmstrip {...props} connected />);
+  fireEvent.click(screen.getByRole('button', { name: '采集截图' }));
+  await waitFor(() => expect(startWireless).toHaveBeenCalledWith('192.168.0.7:5555'));
+  expect(props.setCapture).not.toHaveBeenCalled();
+});

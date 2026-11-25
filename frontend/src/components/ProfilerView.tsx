@@ -34,6 +34,9 @@ interface Props {
   getTimeline?: (index: number, frameIndex: number) => Promise<CpuTimelineFrame[]>;
   getHeavyProfile?: (start: number, end: number) => Promise<HeavyProfile>;
   getScreenshots?: (offset: number, count: number, selected: number) => Promise<ScreenFilmstripData>;
+  wirelessAddress?: string;
+  startWireless?: (address: string) => Promise<void>;
+  enableWireless?: () => Promise<string>;
   setScreenCapture?: (enabled: boolean) => Promise<void>;
   recording: boolean;
   connected: boolean;
@@ -58,7 +61,7 @@ const initialVp: Viewport = {
 /** Unity Profiler 2022 主视图：实时滚动 / 暂停视野 / 滚轮缩放。 */
 export function ProfilerView({
   frames, totalCount, fetchRange, getFrame, getHierarchy, getTimeline, getHeavyProfile, recording, connected,
-  getScreenshots, setScreenCapture,
+  getScreenshots, setScreenCapture, wirelessAddress, startWireless, enableWireless,
   deepProfiling = false, callStacks = false,
   onClear, onToggleRecord, onPause, onImport, onDeepProfiling, onCallStacks,
 }: Props) {
@@ -307,7 +310,7 @@ export function ProfilerView({
         ))}
       </div>
       {getScreenshots && setScreenCapture && (
-        <ScreenFilmstrip fetchStrip={getScreenshots} setCapture={setScreenCapture} connected={connected}
+        <ScreenFilmstrip wirelessAddress={wirelessAddress} fetchStrip={getScreenshots} setCapture={setScreenCapture} startWireless={startWireless} enableWireless={enableWireless} connected={connected}
           start={windowed.start} count={Math.min(windowed.visible, Math.max(0, total - windowed.start))}
           selected={windowed.selected} onSelect={clampSeek} />
       )}

@@ -12,6 +12,8 @@ export type {
     HeavySample,
     HeavyThread,
     ImportProgressEvent,
+    PhoneInfo,
+    PhoneInventory,
     PlayerLog,
     ScreenFilmstrip,
     ScreenThumbnail,
