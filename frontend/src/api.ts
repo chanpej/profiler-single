@@ -38,6 +38,7 @@ export const api = {
     PerfService.Analyze().then((r) => ({ ...r, issues: r.issues ?? [] }) as Report),
   clear: (): Promise<void> => PerfService.Clear(),
   setRecording: (on: boolean): Promise<void> => PerfService.SetRecording(on),
+  showMemoryWindow: () => PerfService.ShowMemoryWindow(),
   checkUpdate: () => PerfService.CheckForUpdate(),
   revealExport: (path: string): Promise<void> => PerfService.RevealExport(path),
   exportCapture: (path: string): Promise<void> => PerfService.ExportCapture(path),

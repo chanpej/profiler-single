@@ -78,10 +78,11 @@ describe('ProfilerDetail', () => {
     expect(screen.getByText('Scene Objects')).toBeInTheDocument();
   });
 
-  it('Memory Detailed 页签提示不支持快照', async () => {
+  it('Memory Detailed 提供 Unity 快照和 Android PSS 入口', async () => {
     render(<ProfilerDetail moduleId="memory" frame={frame} />);
     await userEvent.click(screen.getByRole('tab', { name: 'Detailed' }));
-    expect(screen.getByText(/内存快照/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开 .snap' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '采集前台进程 PSS' })).toBeInTheDocument();
   });
 
   it('Memory 掩码将未采集计数器显示为 —，不显示为零', () => {
@@ -329,4 +330,11 @@ describe('ProfilerDetail', () => {
     expect(screen.getByTestId('cpu-timeline')).toBeInTheDocument();
     expect(screen.getByTestId('cpu-timeline-threads')).toHaveTextContent('Main Thread');
   });
+});
+
+it('offers the direct snapshot workflow for WeChat Mini Games without requiring an APK integration', async () => {
+  render(<ProfilerDetail miniGame moduleId="memory" frame={null} />);
+  await userEvent.click(screen.getByRole('tab', { name: 'Detailed' }));
+  expect(screen.queryByRole('button', { name: 'Memory Profiler Capture' })).toBeNull();
+  expect(screen.queryByText(/UnityPerfMemoryCapture.cs/)).toBeNull();
 });

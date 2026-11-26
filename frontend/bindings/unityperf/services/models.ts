@@ -3,6 +3,9 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as memsnap$0 from "../internal/memsnap/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -45,6 +48,25 @@ export interface ImportProgressEvent {
     "total": number;
     "percent": number;
     "fileName": string;
+}
+
+export interface MemoryLibrary {
+    "session": string;
+    "records": MemoryRecord[] | null;
+}
+
+export interface MemoryRecord {
+    "id": string;
+    "session": string;
+    "time": number;
+    "path": string;
+    "sample": MemorySample;
+}
+
+export interface MemorySample {
+    "source": string;
+    "target": string;
+    "rows": memsnap$0.Row[] | null;
 }
 
 export type PhoneInfo = upac$0.PhoneInfo;

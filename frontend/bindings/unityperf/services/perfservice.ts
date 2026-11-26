@@ -35,6 +35,18 @@ export function AutoconnectAddresses(): $CancellablePromise<string[] | null> {
     return $Call.ByID(2589181433);
 }
 
+export function CaptureAndroidMemory(): $CancellablePromise<$models.MemorySample> {
+    return $Call.ByID(2685606686);
+}
+
+export function CaptureMiniGameMemory(): $CancellablePromise<$models.MemorySample> {
+    return $Call.ByID(894786708);
+}
+
+export function CaptureUnityMemory(): $CancellablePromise<$models.MemorySample> {
+    return $Call.ByID(2895864212);
+}
+
 export function CheckForUpdate(): $CancellablePromise<string> {
     return $Call.ByID(962810706);
 }
@@ -138,6 +150,14 @@ export function Latest(n: number): $CancellablePromise<protocol$0.FrameData[] | 
     return $Call.ByID(1386866399, n);
 }
 
+export function MemorySnapshotLibrary(): $CancellablePromise<$models.MemoryLibrary> {
+    return $Call.ByID(2355977010);
+}
+
+export function OpenMemorySnapshot(path: string): $CancellablePromise<$models.MemorySample> {
+    return $Call.ByID(884523375, path);
+}
+
 export function PlayerLogs(after: number): $CancellablePromise<$models.PlayerLog[] | null> {
     return $Call.ByID(993932978, after);
 }
@@ -178,6 +198,10 @@ export function SetScreenCapture(enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(4233713962, enabled);
 }
 
+export function ShowMemoryWindow(): $CancellablePromise<void> {
+    return $Call.ByID(3806040170);
+}
+
 export function StartAutoconnect(port: number): $CancellablePromise<void> {
     return $Call.ByID(2394851283, port);
 }
@@ -195,4 +219,11 @@ export function Stats(): $CancellablePromise<collector$0.Stats> {
  */
 export function Status(): $CancellablePromise<$models.Status> {
     return $Call.ByID(848624670);
+}
+
+/**
+ * WaitMiniGameSnapshot accepts only files created or replaced after the user starts listening.
+ */
+export function WaitMiniGameSnapshot(directory: string): $CancellablePromise<$models.MemorySample> {
+    return $Call.ByID(1761795868, directory);
 }

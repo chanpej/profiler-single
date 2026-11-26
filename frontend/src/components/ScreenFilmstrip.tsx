@@ -3,6 +3,8 @@ import { Camera } from 'lucide-react';
 
 import { readSetting, writeSetting } from '../lib/connectionPreferences';
 
+import { MemoryCaptureButton } from './MemoryCaptureButton';
+
 interface Thumbnail {
   id: string;
   frame: number;
@@ -21,6 +23,7 @@ export interface ScreenFilmstripData {
 }
 
 interface Props {
+  miniGame?: boolean;
   fetchStrip: (offset: number, count: number, selected: number) => Promise<ScreenFilmstripData>;
   wirelessAddress?: string;
   startWireless?: (address: string) => Promise<void>;
@@ -37,7 +40,7 @@ const empty: ScreenFilmstripData = { enabled: false, available: false, error: ''
 const imageSource = (shot: Thumbnail) => `data:image/jpeg;base64,${shot.image}`;
 const timing = (shot: Thumbnail) => `估算偏移 ${shot.deltaMs >= 0 ? '+' : ''}${shot.deltaMs} ms · ${shot.streamed ? '连续采集' : `截图耗时 ${shot.captureMs} ms`}`;
 
-export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, startWireless, enableWireless, connected, start, count, selected, onSelect }: Props) {
+export function ScreenFilmstrip({ miniGame, fetchStrip, setCapture, wirelessAddress, startWireless, enableWireless, connected, start, count, selected, onSelect }: Props) {
   const [strip, setStrip] = useState(empty);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
@@ -102,6 +105,7 @@ export function ScreenFilmstrip({ fetchStrip, setCapture, wirelessAddress, start
         <button type="button" className="btn ghost" onClick={toggle} disabled={busy || (!strip.enabled && (!connected || (wireless && !address.trim())))} aria-pressed={strip.enabled}>
           <Camera size={14} aria-hidden /> {strip.enabled ? '停止截图' : '采集截图'}
         </button>
+        <MemoryCaptureButton miniGame={miniGame} connected={connected} />
         {open && picked && <button type="button" className="btn ghost" onClick={() => setPreview(!preview)}>{preview ? '关闭预览' : '预览选中帧'}</button>}
         {(error || strip.error) && <small role="alert">{error || strip.error}</small>}
         <details className="cpu-mouse-guide"><summary>CPU Usage 操作指南</summary>

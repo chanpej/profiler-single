@@ -147,7 +147,12 @@ describe('ConnectBar', () => {
 
   it('opens Unity logs from the connection toolbar', async () => {
     const onUnityLogs = vi.fn();
-    renderBar({ onUnityLogs });
+    const onMemory = vi.fn();
+    renderBar({ onUnityLogs, onMemory });
+    const memory = screen.getByRole('button', { name: 'Memory Profile' });
+    expect(screen.getByRole('button', { name: 'Unity 日志' }).nextElementSibling).toBe(memory);
+    await userEvent.click(memory);
+    expect(onMemory).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByRole('button', { name: 'Unity 日志' }));
     expect(onUnityLogs).toHaveBeenCalledOnce();
   });

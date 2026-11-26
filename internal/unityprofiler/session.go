@@ -113,6 +113,7 @@ type Session struct {
 	done       chan struct{}
 	deep       bool
 	callStacks bool
+	memory     *memoryTransfer
 	onRaw      func([]byte)
 	onLog      func(string, string)
 }
@@ -253,6 +254,7 @@ func (s *Session) connectTransport(conn net.Conn, incoming bool, onFrame FrameHa
 		conn.Close()
 		return protocol.Handshake{}, errors.New("unityprofiler: already connected")
 	}
+	s.memory = nil
 	s.conn = conn
 	s.handshake = hs
 	s.decoder = NewDecoder(nil)
@@ -470,6 +472,7 @@ func (s *Session) readLoop(ctx context.Context, conn net.Conn, br *bufio.Reader,
 			break
 		}
 		if msg.ID != MsgIDProfilerData {
+			s.receiveMemory(conn, msg)
 			dispatchPlayerLog(msg, onLog)
 			continue
 		}

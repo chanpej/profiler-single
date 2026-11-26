@@ -25,6 +25,7 @@ import { ProfilerChart } from './ProfilerChart';
 import { ProfilerDetail, type CpuTab } from './ProfilerDetail';
 
 interface Props {
+  miniGame?: boolean;
   /** 全量帧（测试或小数据）；与 fetchRange 二选一。 */
   frames?: FrameData[];
   totalCount?: number;
@@ -59,7 +60,7 @@ const initialVp: Viewport = {
 };
 
 /** Unity Profiler 2022 主视图：实时滚动 / 暂停视野 / 滚轮缩放。 */
-export function ProfilerView({
+export function ProfilerView({ miniGame,
   frames, totalCount, fetchRange, getFrame, getHierarchy, getTimeline, getHeavyProfile, recording, connected,
   getScreenshots, setScreenCapture, wirelessAddress, startWireless, enableWireless,
   deepProfiling = false, callStacks = false,
@@ -310,7 +311,7 @@ export function ProfilerView({
         ))}
       </div>
       {getScreenshots && setScreenCapture && (
-        <ScreenFilmstrip wirelessAddress={wirelessAddress} fetchStrip={getScreenshots} setCapture={setScreenCapture} startWireless={startWireless} enableWireless={enableWireless} connected={connected}
+        <ScreenFilmstrip miniGame={miniGame} wirelessAddress={wirelessAddress} fetchStrip={getScreenshots} setCapture={setScreenCapture} startWireless={startWireless} enableWireless={enableWireless} connected={connected}
           start={windowed.start} count={Math.min(windowed.visible, Math.max(0, total - windowed.start))}
           selected={windowed.selected} onSelect={clampSeek} />
       )}
@@ -377,7 +378,7 @@ export function ProfilerView({
           onPointerUp={onResizePointerUp}
           onPointerCancel={onResizePointerUp}
         />
-        <ProfilerDetail moduleId={active} frame={picked} hierarchy={hierarchy} callStacks={callStacks}
+        <ProfilerDetail miniGame={miniGame} moduleId={active} frame={picked} hierarchy={hierarchy} callStacks={callStacks}
           onTimelineRange={syncTimelineRange}
           getHeavyProfile={getHeavyProfile} heavyRange={validHeavyRange} onHeavyRange={setHeavyRange}
           cpuTab={cpuTab} onCpuTabChange={setCpuTab} totalFrames={total}

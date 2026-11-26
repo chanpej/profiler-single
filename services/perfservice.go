@@ -113,6 +113,9 @@ type PerfService struct {
 	loadedHS          protocol.Handshake
 	capturePhone      *upac.PhoneInfo
 	captureGeneration uint64
+	memoryEntries     []upac.MemoryEntry
+	historyInstance   string
+	memoryWindowMu    sync.Mutex
 	deep              bool
 	callStacks        bool
 	lastErr           string
@@ -145,14 +148,15 @@ var reconnectInterval = 400 * time.Millisecond
 // NewPerfService 创建服务实例。
 func NewPerfService() *PerfService {
 	p := &PerfService{
-		client:     device.NewClient(),
-		session:    collector.NewSession(0),
-		adbRun:     adbforward.DefaultRun,
-		emit:       func(string, any) {},
-		recording:  true,
-		captureRaw: true,
-		tickReq:    make(chan struct{}, 1),
-		stopUI:     make(chan struct{}),
+		historyInstance: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()),
+		client:          device.NewClient(),
+		session:         collector.NewSession(0),
+		adbRun:          adbforward.DefaultRun,
+		emit:            func(string, any) {},
+		recording:       true,
+		captureRaw:      true,
+		tickReq:         make(chan struct{}, 1),
+		stopUI:          make(chan struct{}),
 	}
 	p.client.SetRawHandler(p.onRaw)
 	p.client.SetLogHandler(p.onPlayerLog)
@@ -382,6 +386,7 @@ func (p *PerfService) connectTCP(host string, port int, transport string, fresh 
 	if fresh {
 		p.session.ClearAll()
 		p.captureGeneration++
+		p.memoryEntries = nil
 		p.capturePhone = nil
 		p.resetScreenLocked(true)
 		p.sourceFile = ""
@@ -563,6 +568,7 @@ func (p *PerfService) Clear() {
 	} else {
 		p.session.ClearAll()
 		p.captureGeneration++
+		p.memoryEntries = nil
 		p.capturePhone = nil
 	}
 	p.resetScreenLocked(false)
@@ -733,15 +739,16 @@ func (p *PerfService) ExportCapture(path string) error {
 		hs = p.loadedHS
 	}
 	phone := p.capturePhone
+	memory := append([]upac.MemoryEntry(nil), p.memoryEntries...)
 	screen := p.screenTrackLocked()
 	emit := p.emit
 	p.mu.Unlock()
-	if len(raw) == 0 {
-		return errors.New("没有可导出的原始 PD3U 数据")
+	if len(raw) == 0 && len(memory) == 0 {
+		return errors.New("没有可导出的性能或内存采集记录")
 	}
 	lastUpdate := time.Time{}
 	lastPercent := 0
-	archive := upac.File{Phone: phone, Handshake: hs, Raw: raw, Screen: screen}
+	archive := upac.File{Memory: memory, Phone: phone, Handshake: hs, Raw: raw, Screen: screen}
 	if err := upac.SaveFileWithProgress(path, archive, func(done, total int) {
 		percent := int(int64(done) * 99 / int64(total))
 		if emit != nil && percent > lastPercent && (done == total || time.Since(lastUpdate) >= importProgressMinInterval) {
@@ -798,7 +805,7 @@ func (p *PerfService) importUnityData(path string) (int, error) {
 	}
 	p.emitImportProgress(fileName, "parse", 1, 1, true, &last)
 	p.session.ReplaceFrames(file.Frames)
-	return p.finishImport(path, file.Handshake, screenshots.Track{}, nil)
+	return p.finishImport(path, file.Handshake, screenshots.Track{}, nil, nil)
 }
 
 func (p *PerfService) importUPAC(path string) (int, error) {
@@ -809,7 +816,7 @@ func (p *PerfService) importUPAC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPAC 存档：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, file.Screen, file.Phone, &last)
+	return p.importRawPD3U(path, fileName, file.Raw, file.Handshake, file.Screen, file.Phone, file.Memory, &last)
 }
 
 // importUPPC loads a transparent Editor↔Player proxy capture. It is a lossless
@@ -822,10 +829,15 @@ func (p *PerfService) importUPPC(path string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("无法读取 UPPC 原始抓包：%w", err)
 	}
-	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), screenshots.Track{}, nil, &last)
+	return p.importRawPD3U(path, fileName, captureFile.Bodies, handshakeFromPD3U(captureFile.Bodies), screenshots.Track{}, nil, nil, &last)
 }
 
-func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo, last *time.Time) (int, error) {
+func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo, memory []upac.MemoryEntry, last *time.Time) (int, error) {
+	if len(raw) == 0 && len(memory) > 0 {
+		p.session.ReplaceFrames(nil)
+		p.session.SetRaw(nil)
+		return p.finishImport(path, handshake, screen, phone, memory)
+	}
 	frames, err := unityprofiler.ReplayFramesWithProgress(raw, func(done, total int) {
 		p.emitImportProgress(fileName, "parse", done, total, false, last)
 	})
@@ -838,7 +850,7 @@ func (p *PerfService) importRawPD3U(path, fileName string, raw [][]byte, handsha
 	p.emitImportProgress(fileName, "parse", len(raw), len(raw), true, last)
 	p.session.ReplaceFrames(frames)
 	p.session.SetRaw(raw)
-	return p.finishImport(path, handshake, screen, phone)
+	return p.finishImport(path, handshake, screen, phone, memory)
 }
 
 func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
@@ -854,7 +866,7 @@ func handshakeFromPD3U(raw [][]byte) protocol.Handshake {
 	return protocol.Handshake{}
 }
 
-func (p *PerfService) finishImport(path string, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo) (int, error) {
+func (p *PerfService) finishImport(path string, handshake protocol.Handshake, screen screenshots.Track, phone *upac.PhoneInfo, memory []upac.MemoryEntry) (int, error) {
 	connected := p.client.Connected()
 	p.mu.Lock()
 	p.resetScreenLocked(true)
@@ -862,6 +874,8 @@ func (p *PerfService) finishImport(path string, handshake protocol.Handshake, sc
 	p.sourceFile = path
 	p.loadedHS = handshake
 	p.captureGeneration++
+	p.memoryEntries = nil
+	p.memoryEntries = memory
 	p.capturePhone = phone
 	p.captureRaw = false
 	if connected {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"unityperf/internal/protocol"
 	"unityperf/internal/screenshots"
@@ -55,6 +56,7 @@ type archiveMetadata struct {
 }
 
 type File struct {
+	Memory    []MemoryEntry
 	Phone     *PhoneInfo
 	Handshake protocol.Handshake
 	Raw       [][]byte
@@ -105,18 +107,22 @@ func SaveFile(path string, file File) error {
 }
 
 func SaveFileWithProgress(path string, file File, progress func(done, total int)) error {
-	if len(file.Raw) == 0 {
+	if len(file.Raw) == 0 && len(file.Memory) == 0 {
 		return ErrNoRawData
 	}
-	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	out, err := os.CreateTemp(filepath.Dir(path), ".upac-*.tmp")
 	if err != nil {
 		return err
 	}
+	defer os.Remove(out.Name())
 	if err := encode(out, file, progress); err != nil {
 		_ = out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(out.Name(), path)
 }
 
 // Encode serializes a native archive to w.
@@ -125,7 +131,7 @@ func Encode(w io.Writer, file File) error {
 }
 
 func encode(w io.Writer, file File, progress func(done, total int)) error {
-	if len(file.Raw) == 0 {
+	if len(file.Raw) == 0 && len(file.Memory) == 0 {
 		return ErrNoRawData
 	}
 	if len(file.Raw) > maxChunks {
@@ -147,7 +153,12 @@ func encode(w io.Writer, file File, progress func(done, total int)) error {
 		}
 		flags = screenFlag
 	}
-	if err := (header{Magic: Magic, Version: Version, Flags: flags, ChunkCount: uint32(len(file.Raw)), MetaLen: uint32(len(metadata))}).writeTo(w); err != nil {
+	version := Version
+	if len(file.Memory) > 0 {
+		version = memoryVersion
+		flags |= memoryFlag
+	}
+	if err := (header{Magic: Magic, Version: version, Flags: flags, ChunkCount: uint32(len(file.Raw)), MetaLen: uint32(len(metadata))}).writeTo(w); err != nil {
 		return err
 	}
 	if err := writeAll(w, metadata); err != nil {
@@ -180,7 +191,12 @@ func encode(w io.Writer, file File, progress func(done, total int)) error {
 		if err := writeAll(w, length[:]); err != nil {
 			return err
 		}
-		return writeAll(w, screenData)
+		if err := writeAll(w, screenData); err != nil {
+			return err
+		}
+	}
+	if len(file.Memory) > 0 {
+		return writeMemory(w, file.Memory)
 	}
 	return nil
 }
@@ -204,13 +220,16 @@ func Decode(r io.Reader) (File, error) {
 	if h.Magic != Magic {
 		return File{}, ErrBadMagic
 	}
-	if h.Version != Version {
+	if h.Version != Version && h.Version != memoryVersion {
 		return File{}, fmt.Errorf("%w：%d", ErrUnsupportedVersion, h.Version)
 	}
 	if h.MetaLen > maxMetadataBytes {
 		return File{}, fmt.Errorf("握手信息过大（%d 字节）", h.MetaLen)
 	}
-	if h.ChunkCount == 0 {
+	if h.Flags & ^(screenFlag|memoryFlag) != 0 || (h.Version == memoryVersion) != (h.Flags&memoryFlag != 0) {
+		return File{}, errors.New("无效的 UPAC 功能标记")
+	}
+	if h.ChunkCount == 0 && h.Flags&memoryFlag == 0 {
 		return File{}, ErrNoRawData
 	}
 	if h.ChunkCount > maxChunks {
@@ -270,6 +289,12 @@ func Decode(r io.Reader) (File, error) {
 			if len(shot.JPEG) == 0 || shot.Epoch <= 0 || (index > 0 && (shot.Epoch < out.Screen.Shots[index-1].Epoch || shot.TimeNS < out.Screen.Shots[index-1].TimeNS)) {
 				return File{}, errors.New("截图轨道无效")
 			}
+		}
+	}
+	if h.Flags&memoryFlag != 0 {
+		out.Memory, err = readMemory(r)
+		if err != nil {
+			return File{}, err
 		}
 	}
 	var trailing [1]byte

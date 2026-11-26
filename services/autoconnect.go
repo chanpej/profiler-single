@@ -85,6 +85,7 @@ func (p *PerfService) startAutoconnect(listener net.Listener) error {
 	}
 	p.session.ClearAll()
 	p.captureGeneration++
+	p.memoryEntries = nil
 	p.capturePhone = nil
 	p.resetScreenLocked(true)
 	p.transport = autoConnectTransport

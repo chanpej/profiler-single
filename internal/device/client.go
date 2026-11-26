@@ -3,6 +3,7 @@
 package device
 
 import (
+	"context"
 	"net"
 
 	"unityperf/internal/protocol"
@@ -99,3 +100,5 @@ func (c *Client) Close() {
 		c.sess.Close()
 	}
 }
+
+func (c *Client) CaptureMemory(ctx context.Context) ([]byte, error) { return c.sess.CaptureMemory(ctx) }

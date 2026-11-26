@@ -46,7 +46,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if *metadataOnly {
-		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"handshake": capture.Handshake, "phone": capture.Phone}); err != nil {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"rawChunks": len(capture.Raw), "handshake": capture.Handshake, "phone": capture.Phone, "memory": capture.Memory}); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -70,7 +70,7 @@ func main() {
 		return
 	}
 	metadata := map[string]any{
-		"kind": "capture", "phone": capture.Phone, "handshake": capture.Handshake, "rawChunks": len(capture.Raw),
+		"kind": "capture", "phone": capture.Phone, "memory": capture.Memory, "handshake": capture.Handshake, "rawChunks": len(capture.Raw),
 		"decodedFrames": len(frames), "screenShots": len(capture.Screen.Shots),
 		"start": *start, "endExclusive": end,
 	}

@@ -1,6 +1,6 @@
 ---
 name: upac-performance-analysis
-description: 从 unityperf 的 Unity 2022 .upac 录制精确提取帧、CPU 调用树、线程时间线、调用次数、内存计数器及截图时间偏差，并结合对应版本的 Unity 游戏源码定位卡顿、GC 和性能热点。用于 UPAC 离线分析、源码归因和优化前后复测。
+description: 从 unityperf 的 Unity 2022 .upac 录制精确提取帧、CPU 调用树、线程时间线、调用次数、内存计数器及截图时间偏差，并结合对应版本的 Unity 游戏源码定位卡顿、GC 和性能热点。使用 UPAC 内嵌的 Memory Profiler 快照与 Android PSS 分析内存占用、类型增长及优化前后差异。
 ---
 
 # UPAC 性能分析
@@ -10,7 +10,28 @@ description: 从 unityperf 的 Unity 2022 .upac 录制精确提取帧、CPU 调�
 先在 Skill 文件夹运行 `.\tools\upac.exe -file 'D:\captures\battle.upac' -metadata`，读取录制时的设备信息。`phone` 是匹配该 Player 的 ADB 手机快照，包含品牌、型号、Android/API、ABI、屏幕尺寸、总内存、ADB 标识、Wi-Fi IP 与端口。`handshake` 提供 Player 上报的 Unity 和应用版本。报告注明来源，比较两份录制时核对机型、系统和分辨率。老存档或采集时缺少可匹配设备时 `phone` 为 `null`，使用握手中的型号与系统，其余缺失项标记为未知。屏幕尺寸与游戏渲染分辨率分别记录。
 
 - 找到用户指定的 `.upac`，或在 unityperf 完成采集后通过「文件」保存 `.upac`。记录文件 SHA-256、设备、Unity 版本、运行场景、复现步骤、画质、目标帧率和构建标识。缺少的元数据写为未知。PowerShell 可用 `Get-FileHash -Algorithm SHA256 -LiteralPath <录制路径>`。
-- Windows x64 上复制整个 Skill 文件夹即可使用。文件夹内的 `tools/upac.exe` 集成 UPAC v2 解码器、Unity 2022 帧回放、调用树和截图提取以及帧统计。游戏工程仅在回查业务源码时提供，记录与录制构建的版本关系。若回放失败，保留原始错误和文件信息。
+- Windows x64 上复制整个 Skill 文件夹即可使用。文件夹内的 `tools/upac.exe` 集成 UPAC v2/v3 解码器、Unity 2022 帧回放、调用树和截图提取以及帧统计。游戏工程仅在回查业务源码时提供，记录与录制构建的版本关系。若回放失败，保留原始错误和文件信息。
+
+## 使用随包导出的 Memory Profiler 数据
+
+每次分析先读取 `-metadata` 的 `memory` 和 `rawChunks`。当 `memory` 含记录时，将与问题相关的内存结论写入报告，并附实际数值和记录编号。`rawChunks` 为 0 时，直接完成内存分析，跳过后面的帧回放命令。`memory` 缺失、为 null 或为空数组时，按可用的帧级计数器分析。
+
+```powershell
+$recording = 'D:\captures\battle.upac'
+$json = & .\tools\upac.exe -file $recording -metadata
+if ($LASTEXITCODE) { throw 'UPAC 元信息读取失败' }
+$meta = ($json -join "`n") | ConvertFrom-Json
+for ($i = 0; $i -lt $meta.memory.Count; $i++) {
+    $entry = $meta.memory[$i]
+    "memory[$i]  $($entry.source)  $($entry.target)  $($entry.time)"
+    $entry.rows | Sort-Object bytes -Descending | Select-Object -First 5 name, bytes, count
+}
+```
+
+- **单次 Unity 快照**。`source=snap` 的 `rows` 是从 `.snap` 提取的原生对象类型汇总。用所有行的 `bytes` 求原生对象总量，报告占用最高的类型、MiB、占比与 `count`。总量为零时省略占比。将结论限定在本次快照的对象分布；泄漏归因需要复现后的增长和对象引用证据。
+- **多次快照**。按 `time`（主机 Unix 毫秒）排序并保留原数组编号。根据复现步骤选择同一 Player 的基线和复测记录，`target` 可能只是快照显示名。按类型名汇总后取两次类型的并集，用“复测减基线”计算字节与对象数的变化，纳入新增和消失的类型。按正向字节增量定位增长来源，同时列出主要释放项。例如纹理数增加与数量持平但字节增加，对应不同的后续排查方向。计算使用原始字节，展示时除以 1,048,576 得 MiB。
+- **Android PSS**。`source=pss` 使用 `target` 标识的进程及 PID，汇总已上报分类的 `bytes`，列出 Graphics、Native Heap 等主要贡献。PSS 行的 `count` 没有对象计数含义。只对同一进程实例、同名且两次均有值的分类计算增减，缺失项标记为未上报。微信小游戏的 PSS 覆盖宿主进程。原生对象合计与进程 PSS 各自报告，避免重复计量。
+- **与性能帧关联**。快照 `time` 记录主机侧加入会话的时间，`playerStartNs` 属于 Player 时钟。优先用已知场景切换、采集顺序或独立时间锚点关联，注明对齐精度。缺少锚点时只描述同场景趋势。引用证据时写出 `memory[i]`、来源、目标、时间及具体分类，以便复核。
 
 ## 提取可复查的数据
 

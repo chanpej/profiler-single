@@ -18,6 +18,7 @@ interface Props {
   onAutoconnect?: () => void;
   autoconnectAddresses?: string[];
   onClear: () => void;
+  onMemory?: () => void;
   onUnityLogs?: () => void;
 }
 
@@ -33,7 +34,7 @@ export function ConnectBar({
   onAutoconnect,
   autoconnectAddresses,
   onClear,
-  onUnityLogs,
+  onMemory, onUnityLogs,
 }: Props) {
   const [showPhones, setShowPhones] = useState(false);
   const [manualIP, setDeviceIP] = useState(() => readSetting('appIP'));
@@ -147,7 +148,8 @@ export function ConnectBar({
         {!phones?.devices.length && <p>{phones?.error || '暂无在线 ADB 手机'}</p>}
       </div>}</details>
       <div className="connect-bar-spacer" />
-      {onUnityLogs && <button type="button" className="btn ghost" onClick={onUnityLogs}>Unity 日志</button>}
+      {onUnityLogs && <button type="button" className="btn" onClick={onUnityLogs}>Unity 日志</button>}
+      {onMemory && <button type="button" className="btn" onClick={onMemory}>Memory Profile</button>}
       <span className="frame-counter mono" title="累计采集帧数">
         {status.totalFrames.toLocaleString()} 帧
       </span>

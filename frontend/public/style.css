@@ -1383,3 +1383,19 @@ code {
 .cpu-mouse-guide summary { cursor: pointer; color: var(--text-dim); }
 .cpu-mouse-guide dl { position: absolute; right: 0; top: 100%; z-index: 20; display: grid; grid-template-columns: max-content max-content; gap: 6px 12px; padding: 12px; margin: 4px 0 0; background: var(--bg-panel); border: 1px solid var(--border); }
 .cpu-mouse-guide dd { margin: 0; }
+
+.memory-snapshots { padding: 8px; overflow: auto; height: 100%; }
+.memory-snapshot-tools { display:flex; flex-wrap:wrap; gap:6px; }
+.memory-snapshots table { border-collapse:collapse; width:100%; }
+.memory-snapshots td,.memory-snapshots th { padding:4px 8px; text-align:right; border-bottom:1px solid var(--border); }
+.memory-snapshots td:first-child,.memory-snapshots th:first-child { text-align:left; }
+
+.memory-library { display:flex; flex-direction:column; height:100%; }
+.memory-library header, .memory-library nav { display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--bg-panel); border-bottom:1px solid var(--border); }
+.memory-library h1 { margin:0 auto 0 0; font-size:16px; }.memory-library h2 { font-size:15px; }
+.memory-library-columns { display:grid; grid-template-columns:minmax(260px,32%) 1fr; min-height:0; flex:1; }
+.memory-library aside,.memory-library article { overflow:auto; }.memory-library aside { border-right:1px solid var(--border); }
+.memory-library article,.memory-library aside p { padding:0 16px; }.memory-library article {user-select:text; overflow-wrap:anywhere;}
+.memory-library nav { position:sticky;top:0; }.memory-library button[aria-pressed] {color:var(--text-dim);background:transparent;border:0;padding:5px;cursor:pointer;}
+.memory-library button[aria-pressed=true] {color:var(--accent);background:var(--bg-hover);}.memory-library .memory-record {display:grid; gap:4px;width:100%;text-align:left;padding:9px 14px;overflow-wrap:anywhere;}
+.memory-library table {width:100%;border-collapse:collapse;}.memory-library th,.memory-library td {text-align:right;padding:4px 8px;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;}.memory-library th:first-child,.memory-library td:first-child {text-align:left;}

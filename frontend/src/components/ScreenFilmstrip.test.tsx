@@ -34,3 +34,13 @@ it('prepares the wireless address before connecting and starts capture on that e
   await waitFor(() => expect(startWireless).toHaveBeenCalledWith('192.168.0.7:5555'));
   expect(props.setCapture).not.toHaveBeenCalled();
 });
+
+it('places memory capture directly after the screenshot button and enables it for a connected Mini Game', () => {
+  const props = { miniGame:true, fetchStrip:()=>new Promise<never>(()=>{}), setCapture:vi.fn(), start:0, count:0, selected:-1, onSelect:vi.fn() };
+  const view = render(<ScreenFilmstrip {...props} connected={false} />);
+  const button = screen.getByRole('button', { name:'Memory Profiler Capture' });
+  expect(screen.getByRole('button', { name:'采集截图' }).nextElementSibling).toBe(button);
+  expect(button).toBeDisabled();
+  view.rerender(<ScreenFilmstrip {...props} connected />);
+  expect(button).toBeEnabled();
+});

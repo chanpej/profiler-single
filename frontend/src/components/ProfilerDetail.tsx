@@ -5,6 +5,7 @@ import { memoryEditorSummary, memoryMetricAvailable, moduleBreakdown, moduleById
 import { formatCount, formatFps, formatGCAlloc, formatMB1, formatMs, formatPct, formatProfilerValue } from '../lib/format';
 import { categoryColor, flattenVisible, mergeExpanded, mergeSampleNodes } from '../lib/hierarchy';
 import { copyText } from '../lib/clipboard';
+import { MemorySnapshots } from './MemorySnapshots';
 import { CpuTimeline } from './CpuTimeline';
 import { CpuLeftHeavy } from './CpuLeftHeavy';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../lib/hierarchyLayout';
 
 interface Props {
+  miniGame?: boolean;
   moduleId: ProfilerModuleId;
   frame: FrameData | null;
   hierarchy?: SampleNode[];
@@ -41,7 +43,7 @@ export type CpuTab = 'hierarchy' | 'timeline' | 'left-heavy';
 type MemTab = 'simple' | 'detailed';
 
 /** 选中帧的模块详情：还原 Unity Profiler 底部面板。 */
-export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = false, getTimeline, timelineSelection = -1, timelineFallback, onTimelineSeek, refreshTimeline,
+export function ProfilerDetail({ miniGame, moduleId, frame, hierarchy = [], callStacks = false, getTimeline, timelineSelection = -1, timelineFallback, onTimelineSeek, refreshTimeline,
   getHeavyProfile, heavyRange, onHeavyRange, onTimelineRange, cpuTab: controlledCpuTab, onCpuTabChange, totalFrames = 0 }: Props) {
   const [localCpuTab, setLocalCpuTab] = useState<CpuTab>('hierarchy');
   const cpuTab = controlledCpuTab ?? localCpuTab;
@@ -64,7 +66,7 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
         {moduleId === 'memory' && (
           <div className="profiler-tabs" role="tablist" aria-label="Memory 视图">
             <button type="button" role="tab" aria-selected={memTab === 'simple'} className={memTab === 'simple' ? 'is-active' : ''} onClick={() => setMemTab('simple')}>Simple</button>
-            <button type="button" role="tab" aria-selected={memTab === 'detailed'} className={memTab === 'detailed' ? 'is-active' : ''} onClick={() => setMemTab('detailed')} title="Detailed 需要内存快照，独立采集暂不支持">Detailed</button>
+            <button type="button" role="tab" aria-selected={memTab === 'detailed'} className={memTab === 'detailed' ? 'is-active' : ''} onClick={() => setMemTab('detailed')} title="采集或比较内存快照">Detailed</button>
           </div>
         )}
       </div>
@@ -73,6 +75,8 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
           <TimelineDetail frame={timelineFrame} hierarchy={hierarchy} load={getTimeline} seek={onTimelineSeek}
             onVisibleRange={onTimelineRange}
             index={frame ? timelineSelection : (timelineFallback?.index ?? timelineSelection)} refresh={refreshTimeline} totalFrames={totalFrames} />
+        ) : moduleId === 'memory' && memTab === 'detailed' ? (
+          <MemorySnapshots miniGame={miniGame} />
         ) : !frame ? (
           <p className="dim">选择一帧以查看详情</p>
         ) : moduleId === 'cpu' && cpuTab === 'left-heavy' && getHeavyProfile && onHeavyRange ? (
@@ -80,8 +84,7 @@ export function ProfilerDetail({ moduleId, frame, hierarchy = [], callStacks = f
             totalFrames={totalFrames} load={getHeavyProfile} onSelectRange={onHeavyRange} />
         ) : moduleId === 'cpu' && cpuTab === 'hierarchy' && hierarchy.length > 0 ? (
           <SampleHierarchy nodes={hierarchy} callStacks={callStacks} />
-        ) : moduleId === 'memory' && memTab === 'detailed' ? (
-          <p className="dim">Detailed 视图需要 Unity 内存快照，当前采集通道仅提供 Simple 计数器。</p>
+
         ) : moduleId === 'memory' ? (
           <MemorySimple frame={frame} />
         ) : moduleId === 'rendering' ? (

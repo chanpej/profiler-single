@@ -74,3 +74,19 @@ class PortableTests(unittest.TestCase):
                 out.write(struct.pack('<I', len(payload)) + payload)
             row = json.loads(run(*detail).splitlines()[1])
             self.assertEqual((row['screenJpegBase64'], row['screenDeltaMs']), ('/9j/2Q==', 2))
+
+    def test_memory_only_metadata(self):
+        tool = Path(__file__).resolve().parents[1] / 'tools/upac.exe'
+        snapshot = dict(source='snap', time=1000, target='baseline', rows=[dict(name='Texture2D', bytes=1048576, count=2)])
+        pss = dict(source='pss', time=2000, target='game PID 42', rows=[dict(name='Graphics', bytes=3145728, count=0)])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'memory.upac'
+            with path.open('wb') as stream:
+                stream.write(struct.pack('<4sHHHHII', b'UPAC', 3, 2, 0, 0, 0, 2) + b'{}')
+                stream.write(struct.pack('<I', 2))
+                for entry, payload in [(snapshot, b'snapshot-payload'), (pss, b'')]:
+                    header = json.dumps(entry).encode()
+                    stream.write(struct.pack('<IQ', len(header), len(payload)) + header + payload)
+            meta = json.loads(subprocess.check_output([str(tool), '-file', str(path), '-metadata']))
+            self.assertEqual(meta['rawChunks'], 0)
+            self.assertEqual(meta['memory'], [snapshot, pss])

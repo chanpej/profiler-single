@@ -255,10 +255,11 @@ function App() {
             onAutoconnect={() => guard(() => api.startAutoconnect(37100))}
             autoconnectAddresses={autoconnectAddresses}
             onClear={onClear}
+            onMemory={() => guard(api.showMemoryWindow)}
             onUnityLogs={() => setOverlay('logs')}
           />
 
-          <ProfilerView
+          <ProfilerView miniGame={mode === 'mini'}
             totalCount={status.retained}
             fetchRange={fetchRange}
             getFrame={getFrame}
