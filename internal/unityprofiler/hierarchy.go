@@ -102,7 +102,7 @@ func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.Sam
 	}
 	out := make([]protocol.SampleNode, 0, len(nodes))
 	for _, n := range nodes {
-		name, cat := "Sample", ""
+		name, cat := "", ""
 		if info, ok := d.meta.markers[n.markerID]; ok {
 			name = info.sampleName(n.meta)
 			category := info.Category
@@ -114,6 +114,8 @@ func treeToSamples(d *Decoder, nodes []*treeNode, originNS int64) []protocol.Sam
 				}
 			}
 			cat = d.meta.categoryName(category)
+		} else {
+			name = fmt.Sprintf("Unresolved marker #%d", n.markerID)
 		}
 		s := protocol.SampleNode{
 			Name:     name,

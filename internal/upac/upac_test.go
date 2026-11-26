@@ -159,3 +159,22 @@ func TestRejectsEmptyAndForeignArchives(t *testing.T) {
 		t.Fatal("expected foreign format to fail")
 	}
 }
+
+func TestRejectIncompleteDictionaryWithoutReplacingPreviousExport(t *testing.T) {
+	raw := unityprofiler.SampleProfilerCapture()
+	late := append([]byte(nil), raw[1]...)
+	late[4] = 64
+	for _, bad := range [][][]byte{raw[1:], {raw[0], raw[2]}, {raw[0], late, raw[2]}, {raw[0], raw[1], raw[2], raw[0], late}} {
+		path := filepath.Join(t.TempDir(), "session.upac")
+		if err := os.WriteFile(path, []byte("prior"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := SaveFile(path, File{Raw: bad}); err == nil {
+			t.Fatal("saved incomplete stream")
+		}
+		content, err := os.ReadFile(path)
+		if err != nil || string(content) != "prior" {
+			t.Fatal("overwrote previous archive", err)
+		}
+	}
+}

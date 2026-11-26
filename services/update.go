@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const appVersion = "0.2.0"
+const appVersion = "0.2.1"
 const distribution = "https://raw.githubusercontent.com/chanpej/unityperf/"
 const maxBinary = 128 << 20
 

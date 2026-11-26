@@ -97,28 +97,30 @@ type Status struct {
 
 // PerfService 是性能采集与分析的门面，供前端调用。
 type PerfService struct {
-	connectionMu      sync.Mutex
-	mu                sync.Mutex
-	client            *device.Client
-	session           *collector.Session
-	transport         string
-	tunnel            *adbforward.Tunnel
-	adbRun            adbforward.Runner
-	emit              func(name string, data any)
-	logger            *log.Logger
-	logFile           *os.File
-	recording         bool
-	captureRaw        bool
-	sourceFile        string
-	loadedHS          protocol.Handshake
-	capturePhone      *upac.PhoneInfo
-	captureGeneration uint64
-	memoryEntries     []upac.MemoryEntry
-	historyInstance   string
-	memoryWindowMu    sync.Mutex
-	deep              bool
-	callStacks        bool
-	lastErr           string
+	connectionMu        sync.Mutex
+	mu                  sync.Mutex
+	client              *device.Client
+	session             *collector.Session
+	transport           string
+	tunnel              *adbforward.Tunnel
+	adbRun              adbforward.Runner
+	emit                func(name string, data any)
+	logger              *log.Logger
+	logFile             *os.File
+	recording           bool
+	captureRaw          bool
+	liveDefinitions     [][]byte
+	liveDefinitionBytes int
+	sourceFile          string
+	loadedHS            protocol.Handshake
+	capturePhone        *upac.PhoneInfo
+	captureGeneration   uint64
+	memoryEntries       []upac.MemoryEntry
+	historyInstance     string
+	memoryWindowMu      sync.Mutex
+	deep                bool
+	callStacks          bool
+	lastErr             string
 
 	// wantLive 表示用户点了连接且尚未点断开。对端 EOF 后仍为 true，会自动重连。
 	wantLive        bool
@@ -563,7 +565,10 @@ func (p *PerfService) Stats() collector.Stats {
 func (p *PerfService) Clear() {
 	connected := p.client.Connected()
 	p.mu.Lock()
-	if connected && p.captureRaw {
+	if connected && len(p.liveDefinitions) > 0 {
+		p.session.Clear()
+		p.session.SetRaw(p.liveDefinitions)
+	} else if connected && p.captureRaw {
 		p.session.ClearRecordedData()
 	} else {
 		p.session.ClearAll()
@@ -910,6 +915,14 @@ func (p *PerfService) onRaw(body []byte) {
 	defer p.mu.Unlock()
 	if unityprofiler.IsStreamHeader(body) {
 		p.screen.epoch++
+		p.liveDefinitions = [][]byte{body}
+		p.liveDefinitionBytes = len(body)
+	} else if len(p.liveDefinitions) > 0 {
+		// Keep the active Player dictionary independently of imported recordings and UI clears.
+		if chunk, err := unityprofiler.ParseChunk(body); err == nil && chunk.IsMetadata() && p.liveDefinitionBytes+len(body) <= 1<<30 {
+			p.liveDefinitions = append(p.liveDefinitions, body)
+			p.liveDefinitionBytes += len(body)
+		}
 	}
 	if p.captureRaw {
 		p.session.AppendRaw(body)

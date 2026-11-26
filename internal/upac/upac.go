@@ -137,6 +137,9 @@ func encode(w io.Writer, file File, progress func(done, total int)) error {
 	if len(file.Raw) > maxChunks {
 		return fmt.Errorf("原始 PD3U 分块数 %d 超过上限 %d", len(file.Raw), maxChunks)
 	}
+	if err := validateDictionary(file.Raw); err != nil {
+		return err
+	}
 	metadata, err := json.Marshal(archiveMetadata{Handshake: file.Handshake, Phone: file.Phone})
 	if err != nil {
 		return fmt.Errorf("编码握手信息失败：%w", err)
